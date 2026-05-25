@@ -3,7 +3,7 @@ import { createApp } from 'vue'
 import App from '../entrypoints/box/App.vue'
 
 export default defineContentScript({
-  matches: ['*://s.1688.com/selloffer/*'],
+  matches: ['*://s.1688.com/selloffer/*', '*://search.1688.com/selloffer/*'],
 
   main() {
     const render = (parentSelector, childSelector) => {

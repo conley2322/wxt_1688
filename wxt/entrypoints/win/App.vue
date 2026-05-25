@@ -1,23 +1,38 @@
 <!-- win/App.vue - 重构后主布局 -->
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DraggableWindow from './components/DraggableWindow.vue'
 import HsAvatarStack from '../../components/HsAvatarStack.vue'
 import { useApiStore } from '../stores/api/api.js'
+import { useDomStore } from '../stores/dom.js'
+import { useAuthStore } from '../stores/auth.js'
+
 
 const route = useRoute()
 const router = useRouter()
 const store = useApiStore()
+const domStore = useDomStore()
+const authStore = useAuthStore()
+import { ajaxGet } from '../../utils/ajax.js'
 
-// ── 判断当前 Tab ──
-const currentTab = computed(() => {
-  if (route.path.startsWith('/product')) return 'product'
-  if (route.path.startsWith('/supplier')) return 'supplier'
-  if (route.path.startsWith('/analysis')) return 'analysis'
-  return 'product'
+// ── 挂载时从页面抓取真实数据 ──
+onMounted(async () => {
+  console.log('App mounted');
+  /*  const data = await domStore.get_dom_all_data()
+   if (data.title || data.CompanyName) {
+     store.productInfo.title = data.title
+     store.productInfo.supplier_name = data.CompanyName
+     store.productInfo.image_url = data.imageUrl
+     store.productInfo.product_id = data.productId
+   } */
+  await ajaxGet()
+  /* await authStore.request(`/api/v1/products/Product_browsing_history/${store.productInfo.product_id}`, {
+    method: 'POST',
+    body: JSON.stringify({ userId: authStore.userId })
+  }) */
+
 })
-
 // ── SubTab 列表 ──
 const subTabs = computed(() => {
   switch (currentTab.value) {
@@ -72,7 +87,8 @@ function isSubTabActive(path) {
       <img class="overview-thumb" :src="store.productInfo.image_url" alt="" />
       <div class="overview-info">
         <div class="overview-title" :title="store.productInfo.title">{{ store.productInfo.title }}</div>
-        <div class="overview-supplier" :title="store.productInfo.supplier_name">{{ store.productInfo.supplier_name }}</div>
+        <div class="overview-supplier" :title="store.productInfo.supplier_name">{{ store.productInfo.supplier_name }}
+        </div>
         <div class="overview-stats">
           <span class="view-count">👁 {{ totalViewCount }}次</span>
           <HsAvatarStack :viewers="viewerAvatars" :maxShow="3" variant="product" />
@@ -82,20 +98,16 @@ function isSubTabActive(path) {
 
     <!-- 主 Tab 栏 -->
     <div class="main-tabs">
-      <span v-for="tab in [{ key: 'product', label: '商品' }, { key: 'supplier', label: '供应商' }, { key: 'analysis', label: '分析' }]"
-        :key="tab.key"
-        class="main-tab"
-        :class="{ active: currentTab === tab.key }"
-        @click="goToTab(tab.key)">
+      <span
+        v-for="tab in [{ key: 'product', label: '商品' }, { key: 'supplier', label: '供应商' }, { key: 'analysis', label: '分析' }]"
+        :key="tab.key" class="main-tab" :class="{ active: currentTab === tab.key }" @click="goToTab(tab.key)">
         {{ tab.label }}
       </span>
     </div>
 
     <!-- SubTab 栏 -->
     <div class="sub-tabs">
-      <router-link v-for="st in subTabs" :key="st.path"
-        :to="st.path"
-        class="sub-tab"
+      <router-link v-for="st in subTabs" :key="st.path" :to="st.path" class="sub-tab"
         :class="{ active: isSubTabActive(st.path) }">
         {{ st.label }}
       </router-link>
@@ -117,6 +129,7 @@ function isSubTabActive(path) {
   align-items: center;
   border-bottom: 1px solid #f0f0f0;
 }
+
 .overview-thumb {
   width: 48px;
   height: 48px;
@@ -124,6 +137,7 @@ function isSubTabActive(path) {
   object-fit: cover;
   flex-shrink: 0;
 }
+
 .overview-info {
   flex: 1;
   min-width: 0;
@@ -131,6 +145,7 @@ function isSubTabActive(path) {
   flex-direction: column;
   gap: 1px;
 }
+
 .overview-title {
   font-size: 12px;
   font-weight: 600;
@@ -140,6 +155,7 @@ function isSubTabActive(path) {
   text-overflow: ellipsis;
   line-height: 1.4;
 }
+
 .overview-supplier {
   font-size: 11px;
   color: #999;
@@ -148,12 +164,14 @@ function isSubTabActive(path) {
   text-overflow: ellipsis;
   line-height: 1.4;
 }
+
 .overview-stats {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 1px;
 }
+
 .view-count {
   font-size: 11px;
   color: #888;
@@ -165,6 +183,7 @@ function isSubTabActive(path) {
   display: flex;
   border-bottom: 1px solid #f0f0f0;
 }
+
 .main-tab {
   flex: 1;
   text-align: center;
@@ -175,10 +194,12 @@ function isSubTabActive(path) {
   transition: all 0.2s;
   position: relative;
 }
+
 .main-tab.active {
   color: #1677ff;
   font-weight: 600;
 }
+
 .main-tab.active::after {
   content: '';
   position: absolute;
@@ -196,6 +217,7 @@ function isSubTabActive(path) {
   border-bottom: 1px solid #f0f0f0;
   background: #fafafa;
 }
+
 .sub-tab {
   flex: 1;
   text-align: center;
@@ -205,6 +227,7 @@ function isSubTabActive(path) {
   text-decoration: none;
   transition: all 0.2s;
 }
+
 .sub-tab.active {
   color: #1677ff;
   font-weight: 500;
@@ -219,9 +242,11 @@ function isSubTabActive(path) {
   display: flex;
   flex-direction: column;
 }
+
 .content-area::-webkit-scrollbar {
   width: 3px;
 }
+
 .content-area::-webkit-scrollbar-thumb {
   background: #ddd;
   border-radius: 2px;

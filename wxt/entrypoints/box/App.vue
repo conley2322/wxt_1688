@@ -24,6 +24,7 @@ const match_objectId = data_aplus?.match(/object_id@(\d+)/)?.[1];
 const match_link_href = link_element?.href?.match(/offerId=(\d+)/)?.[1];
 
 const offer_id = match_renderkey || match_href || match_offerId || match_objectId || match_link_href;
+console.log('商品 id:', offer_id);
 
 // ── 确定性随机函数 ──
 function seedHash(s) {

@@ -163,6 +163,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     product_id TEXT NOT NULL REFERENCES products(id),
     tag_id TEXT NOT NULL REFERENCES tags(id),
+    visible INTEGER DEFAULT 1,
     assigned_by TEXT REFERENCES users(id),
     assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
@@ -176,6 +177,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     supplier_id TEXT NOT NULL REFERENCES suppliers(id),
     tag_id TEXT NOT NULL REFERENCES tags(id),
+    visible INTEGER DEFAULT 1,
     assigned_by TEXT REFERENCES users(id),
     assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
@@ -256,6 +258,13 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_product_tags_product ON product_tags(pro
 db.exec(`CREATE INDEX IF NOT EXISTS idx_supplier_tags_supplier ON supplier_tags(supplier_id)`)
 
 console.log('Database initialized successfully — 17 tables created')
+
+// ============================================================
+// 兼容性迁移：为已有数据库补充分组字段（如果不存在）
+// ============================================================
+try { db.exec(`ALTER TABLE product_tags ADD COLUMN visible INTEGER DEFAULT 1`) } catch (e) {}
+try { db.exec(`ALTER TABLE supplier_tags ADD COLUMN visible INTEGER DEFAULT 1`) } catch (e) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name)`) } catch (e) {}
 
 // ============================================================
 // 种子数据：初始管理员（账号 1，密码 1）

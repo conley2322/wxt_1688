@@ -1,8 +1,10 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
-import { useAuthStore } from '@/entrypoints/stores/auth'
 
-const auth = useAuthStore()
+const isLoggedIn = ref(false)
+const loading = ref(false)
+const error = ref('')
+const username = ref('')
 
 const serverAddress = ref('')
 const formUsername = ref('')
@@ -10,28 +12,62 @@ const formPassword = ref('')
 const showContent = ref(false)
 const isTransitioning = ref(false)
 
-async function loadServerAddress() {
+async function restoreSession() {// 从本地存储恢复会话
   try {
-    const stored = await browser.storage.local.get('last_server')
-    if (stored.last_server?.address) serverAddress.value = stored.last_server.address
+    const stored = await browser.storage.local.get(['token', 'username', 'serverAddress'])
+    if (stored.token && stored.username) {
+      username.value = stored.username
+      serverAddress.value = stored.serverAddress || ''
+      isLoggedIn.value = true
+    }
   } catch (e) { /* ignore */ }
 }
 
-async function saveServerAddress() {
-  try {
-    await browser.storage.local.set({
-      last_server: { address: serverAddress.value.trim() }
-    })
-  } catch (e) { /* ignore */ }
-}
-
-async function handleLogin() {
+async function handleLogin() {// 处理登录
+  if (!formUsername.value.trim()) return
   if (!serverAddress.value.trim()) return
   isTransitioning.value = true
-  await saveServerAddress()
-  await auth.login(serverAddress.value.trim(), formUsername.value, formPassword.value)
-  await nextTick()
-  setTimeout(() => { isTransitioning.value = false }, 600)
+  loading.value = true
+  error.value = ''
+
+  try {
+    const baseUrl = serverAddress.value.trim().startsWith('http')
+      ? serverAddress.value.trim()
+      : `http://${serverAddress.value.trim()}`
+
+    const res = await fetch(`${baseUrl}/api/v1/users/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: formUsername.value, password: formPassword.value }),
+    })
+
+    const data = await res.json()
+
+    if (!res.ok || data.code !== 200) {
+      throw new Error(data.message || '登录失败')
+    }
+
+    const { token, user } = data.data
+    console.log(data.data);
+
+    await browser.storage.local.set({
+      token,
+      username: user.username,
+      serverAddress: baseUrl,
+    })
+
+    username.value = user.username
+    serverAddress.value = baseUrl
+    isLoggedIn.value = true
+
+    await nextTick()
+  } catch (e) {
+    error.value = e.message || '登录失败，请重试'
+    isLoggedIn.value = false
+  } finally {
+    loading.value = false
+    setTimeout(() => { isTransitioning.value = false }, 600)
+  }
 }
 
 function jumpToAdmin() {
@@ -39,18 +75,22 @@ function jumpToAdmin() {
   chrome.tabs.create({ url })
 }
 
-function handleLogout() {
-  auth.logout()
+async function handleLogout() {
+  await browser.storage.local.remove(['token', 'username', 'serverAddress'])
+  username.value = ''
+  isLoggedIn.value = false
+  error.value = ''
 }
 
 onMounted(async () => {
-  await auth.restoreSession()
-  if (auth.isLoggedIn) {
-    serverAddress.value = auth.serverAddress
-  } else {
-    await loadServerAddress()
+  await restoreSession()
+  if (!isLoggedIn.value) {
+    try {
+      const stored = await browser.storage.local.get('serverAddress')
+
+      if (stored.serverAddress) serverAddress.value = stored.serverAddress
+    } catch (e) { /* ignore */ }
   }
-  // 触发入场动画
   setTimeout(() => { showContent.value = true }, 30)
 })
 </script>
@@ -66,14 +106,14 @@ onMounted(async () => {
 
     <!-- 登录页 -->
     <Transition name="card-swap" mode="out-in">
-      <div v-if="!auth.isLoggedIn" key="login" class="card login-card">
+      <div v-if="!isLoggedIn" key="login" class="card login-card">
         <!-- 品牌头部 -->
         <div class="brand">
           <div class="brand-icon">
             <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
-              <rect x="2" y="2" width="28" height="28" rx="8" stroke="currentColor" stroke-width="1.5"/>
-              <path d="M10 16h12M16 10v12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              <circle cx="16" cy="16" r="3" fill="currentColor" opacity="0.3"/>
+              <rect x="2" y="2" width="28" height="28" rx="8" stroke="currentColor" stroke-width="1.5" />
+              <path d="M10 16h12M16 10v12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              <circle cx="16" cy="16" r="3" fill="currentColor" opacity="0.3" />
             </svg>
           </div>
           <h1 class="brand-title">1688 助手</h1>
@@ -86,60 +126,38 @@ onMounted(async () => {
             <label class="field-label" :class="{ 'has-value': serverAddress }">
               服务器地址
             </label>
-            <input
-              v-model="serverAddress"
-              type="text"
-              class="field-input"
-              placeholder="localhost:3001"
-              :disabled="auth.loading"
-              @focus="$el?.classList.add('focused')"
-              @blur="$el?.classList.remove('focused')"
-            />
+            <input v-model="serverAddress" type="text" class="field-input" placeholder="localhost:3001"
+              :disabled="loading" />
           </div>
 
           <div class="field" :style="{ '--i': 1 }">
             <label class="field-label" :class="{ 'has-value': formUsername }">
               账号
             </label>
-            <input
-              v-model="formUsername"
-              type="text"
-              class="field-input"
-              placeholder="请输入用户名"
-              :disabled="auth.loading"
-            />
+            <input v-model="formUsername" type="text" class="field-input" placeholder="请输入用户名" :disabled="loading" />
           </div>
 
           <div class="field" :style="{ '--i': 2 }">
             <label class="field-label" :class="{ 'has-value': formPassword }">
               密码
             </label>
-            <input
-              v-model="formPassword"
-              type="password"
-              class="field-input"
-              placeholder="请输入密码"
-              :disabled="auth.loading"
-              @keyup.enter="handleLogin"
-            />
+            <input v-model="formPassword" type="password" class="field-input" placeholder="请输入密码" :disabled="loading"
+              @keyup.enter="handleLogin" />
           </div>
         </div>
 
         <!-- 错误提示 -->
         <Transition name="error-shake">
-          <p v-if="auth.error" class="error-msg">{{ auth.error }}</p>
+          <p v-if="error" class="error-msg">{{ error }}</p>
         </Transition>
 
         <!-- 登录按钮 -->
-        <button
-          class="login-btn"
-          :class="{ loading: auth.loading }"
-          :disabled="auth.loading || !formUsername.trim() || !formPassword.trim()"
-          @click="handleLogin"
-        >
-          <span v-if="auth.loading" class="btn-loading">
+        <button class="login-btn" :class="{ loading }"
+          :disabled="loading || !formUsername.trim() || !formPassword.trim()" @click="handleLogin">
+          <span v-if="loading" class="btn-loading">
             <svg class="spinner" viewBox="0 0 24 24" width="18" height="18">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4 31.4" stroke-linecap="round"/>
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none"
+                stroke-dasharray="31.4 31.4" stroke-linecap="round" />
             </svg>
             <span>登录中</span>
           </span>
@@ -150,27 +168,44 @@ onMounted(async () => {
       <!-- 已登录主页 -->
       <div v-else key="home" class="card home-card">
         <div class="avatar-ring">
-          <div class="avatar">{{ auth.username.charAt(0).toUpperCase() }}</div>
+          <div class="avatar">{{ username.charAt(0).toUpperCase() }}</div>
         </div>
         <h2 class="welcome-text">欢迎回来</h2>
         <div class="user-meta">
           <span class="meta-item">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            {{ auth.username }}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            {{ username }}
           </span>
           <span class="meta-item">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-            {{ auth.serverAddress?.replace(/^https?:\/\//, '') || '本地' }}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+              <line x1="6" y1="6" x2="6.01" y2="6" />
+              <line x1="6" y1="18" x2="6.01" y2="18" />
+            </svg>
+            {{ serverAddress?.replace(/^https?:\/\//, '') || '本地' }}
           </span>
         </div>
 
         <div class="home-actions">
           <button class="action-btn primary" @click="jumpToAdmin">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+            </svg>
             管理后台
           </button>
           <button class="action-btn ghost" @click="handleLogout">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
             退出登录
           </button>
         </div>
@@ -258,16 +293,21 @@ onMounted(async () => {
 }
 
 @keyframes glowDrift {
-  0% { transform: translate(0, 0) scale(1); }
-  100% { transform: translate(30px, -20px) scale(1.1); }
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+
+  100% {
+    transform: translate(30px, -20px) scale(1.1);
+  }
 }
 
 .bg-grid {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(201,151,92,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(201,151,92,0.04) 1px, transparent 1px);
+    linear-gradient(rgba(201, 151, 92, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(201, 151, 92, 0.04) 1px, transparent 1px);
   background-size: 32px 32px;
   mask-image: radial-gradient(ellipse at 50% 40%, black, transparent 70%);
   -webkit-mask-image: radial-gradient(ellipse at 50% 40%, black, transparent 70%);
@@ -294,6 +334,7 @@ onMounted(async () => {
     opacity: 0;
     transform: translateY(20px) scale(0.97);
   }
+
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
@@ -322,8 +363,15 @@ onMounted(async () => {
 }
 
 @keyframes iconPulse {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
-  50% { box-shadow: 0 0 0 8px transparent; }
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-glow);
+  }
+
+  50% {
+    box-shadow: 0 0 0 8px transparent;
+  }
 }
 
 .brand-title {
@@ -358,6 +406,7 @@ onMounted(async () => {
     opacity: 0;
     transform: translateY(12px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -419,13 +468,35 @@ onMounted(async () => {
 }
 
 @keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  15% { transform: translateX(-6px); }
-  30% { transform: translateX(5px); }
-  45% { transform: translateX(-4px); }
-  60% { transform: translateX(3px); }
-  75% { transform: translateX(-2px); }
-  90% { transform: translateX(1px); }
+
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  15% {
+    transform: translateX(-6px);
+  }
+
+  30% {
+    transform: translateX(5px);
+  }
+
+  45% {
+    transform: translateX(-4px);
+  }
+
+  60% {
+    transform: translateX(3px);
+  }
+
+  75% {
+    transform: translateX(-2px);
+  }
+
+  90% {
+    transform: translateX(1px);
+  }
 }
 
 .error-shake-enter-active {
@@ -507,7 +578,9 @@ onMounted(async () => {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .btn-loading span {
@@ -560,6 +633,7 @@ onMounted(async () => {
     opacity: 0;
     transform: scale(0.5);
   }
+
   to {
     opacity: 1;
     transform: scale(1);
@@ -567,7 +641,9 @@ onMounted(async () => {
 }
 
 @keyframes ringSpin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .avatar {

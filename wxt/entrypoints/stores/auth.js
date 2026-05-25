@@ -10,16 +10,13 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false)
   const error = ref('')
 
-  const STORAGE_KEY = 'auth_session'
-
   async function restoreSession() {
     try {
-      const stored = await store.get(STORAGE_KEY)
-      const session = stored[STORAGE_KEY]
-      if (session?.token && session?.username) {
-        token.value = session.token
-        username.value = session.username
-        serverAddress.value = session.serverAddress || ''
+      const stored = await store.get(['token', 'username', 'serverAddress'])
+      if (stored.token && stored.username) {
+        token.value = stored.token
+        username.value = stored.username
+        serverAddress.value = stored.serverAddress || ''
         isLoggedIn.value = true
       }
     } catch (e) {
@@ -29,16 +26,16 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function saveToStorage() {
     await store.set({
-      [STORAGE_KEY]: {
-        token: token.value,
-        username: username.value,
-        serverAddress: serverAddress.value,
-      }
+      token: token.value,
+      username: username.value,
+      serverAddress: serverAddress.value,
     })
   }
 
   async function clearStorage() {
-    await store.remove(STORAGE_KEY)
+    await store.remove('token')
+    await store.remove('username')
+    await store.remove('serverAddress')
   }
 
   /**
@@ -92,6 +89,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   /**
    * 通用 API 请求方法，自动拼接 serverAddress
+   * @param {string} path - API 路径，如 "/api/v1/users/login"
+   * @param {Object} options - fetch 选项，如 { method: 'POST', body: JSON.stringify({ username: user, password }) }
    */
   async function request(path, options = {}) {
     const url = `${serverAddress.value}${path}`
