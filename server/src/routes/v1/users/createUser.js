@@ -1,7 +1,9 @@
 import bcrypt from 'bcryptjs'
 import { generateId } from '../../../database/init.js'
+import { Router } from 'express'
+const router = Router()
 
-export const createUser = (req, res, next) => {
+router.post('/', (req, res, next) => {
   try {
     const { username, email, password, color } = req.body
 
@@ -25,4 +27,6 @@ export const createUser = (req, res, next) => {
   } catch (error) {
     next(error)
   }
-}
+})
+
+export default router

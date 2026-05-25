@@ -1,4 +1,7 @@
-export const updateUser = (req, res, next) => {
+import { Router } from 'express'
+const router = Router()
+
+router.put('/', (req, res, next) => {
   try {
     const { username, email, color, status, role } = req.body
     const fields = []
@@ -41,4 +44,6 @@ export const updateUser = (req, res, next) => {
   } catch (error) {
     next(error)
   }
-}
+})
+
+export default router

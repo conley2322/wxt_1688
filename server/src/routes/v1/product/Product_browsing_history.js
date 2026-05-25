@@ -1,19 +1,20 @@
+import { Router } from 'express'
+const router = Router()
 
+router.post('/', (req, res) => {
+    try {
+        const id = crypto.randomUUID()
+        console.log(req.body.product_id, req.body.user_id)
 
-export function recordProductView(req, res) {
-    //uuid 
-    const id = crypto.randomUUID()
-    console.log(res.params);
+        const result = req.db.run(
+            'INSERT INTO view_records (id, product_id, user_id) VALUES (?, ?, ?)',
+            [id, req.body.product_id, req.body.user_id]
+        )
+        console.log(result)
+        res.json({ message: '浏览记录添加成功' })
+    } catch (error) {
+        res.status(500).json({ error: '报错了' })
+    }
+})
 
-
-
-    console.log('req.product.id', req.product.id);
-    console.log('req.user.id', req.user.id);
-
-    req.db.run(
-        'INSERT INTO view_records (id, product_id, user_id) VALUES (?, ?, ?)',
-        [id, req.product.id, req.user.id]
-    )
-
-
-}
+export default router

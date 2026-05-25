@@ -38,5 +38,3 @@ lerna-debug.log*
 .env.local
 .env.*.local
 
-# Local Claude config
-.claude/

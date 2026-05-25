@@ -189,8 +189,8 @@ db.exec(`
 db.exec(`
   CREATE TABLE IF NOT EXISTS view_records (
     id TEXT PRIMARY KEY,
-    product_id TEXT NOT NULL REFERENCES products(id),
-    user_id TEXT NOT NULL REFERENCES users(id),
+    product_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     viewed_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `)

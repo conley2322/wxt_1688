@@ -1,4 +1,7 @@
-export const getUserById = (req, res, next) => {
+import { Router } from 'express'
+const router = Router()
+
+router.get('/', (req, res, next) => {
   try {
     const user = req.db.get('SELECT id, username, email, color, status, role, created_at FROM users WHERE id = ?', [req.params.id])
     if (!user) {
@@ -8,4 +11,6 @@ export const getUserById = (req, res, next) => {
   } catch (error) {
     next(error)
   }
-}
+})
+
+export default router

@@ -2,22 +2,10 @@ import express from 'express'
 
 const router = express.Router()
 
-// ── users 模块 ──
-import { getUsers } from './users/getUsers.js'
-import { getUserById } from './users/getUserById.js'
-import { createUser } from './users/createUser.js'
-import { updateUser } from './users/updateUser.js'
-import { deleteUser } from './users/deleteUser.js'
-import { login } from './users/login.js'
-router.post('/users/login', login)
-router.get('/users', getUsers)
-router.get('/users/:id', getUserById)
-router.post('/users', createUser)
-router.put('/users/:id', updateUser)
-router.delete('/users/:id', deleteUser)
+// 所有接口统一加载，每个模块的子路由在各自 index.js 中注册
 
- // ── products 模块 ──
- import { recordProductView } from './product/Product_browsing_history.js'
- router.get('/products/Product_browsing_history/:offerId', recordProductView)
+router.use('/users', (await import('./users/index.js')).default)       // /api/v1/users/**
+router.use('/products', (await import('./product/index.js')).default)   // /api/v1/products/**
+router.use('/tags', (await import('./tags/index.js')).default)          // /api/v1/tags/**
 
 export default router

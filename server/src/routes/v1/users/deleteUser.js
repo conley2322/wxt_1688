@@ -1,4 +1,7 @@
-export const deleteUser = (req, res, next) => {
+import { Router } from 'express'
+const router = Router()
+
+router.delete('/', (req, res, next) => {
   try {
     const changes = req.db.run('DELETE FROM users WHERE id = ?', [req.params.id])
     if (changes.changes === 0) {
@@ -8,4 +11,6 @@ export const deleteUser = (req, res, next) => {
   } catch (error) {
     next(error)
   }
-}
+})
+
+export default router

@@ -83,6 +83,16 @@ async function handleLogout() {
 }
 
 onMounted(async () => {
+
+  fetch('http://localhost:3001/api/v1/products/Product_browsing_history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ product_id: '213231312313', user_id: `1` }),
+  })
+
+
+
+
   await restoreSession()
   if (!isLoggedIn.value) {
     try {

@@ -1,9 +1,11 @@
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import { Router } from 'express'
+const router = Router()
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key'
 
-export const login = (req, res, next) => {
+router.post('/', (req, res, next) => {
   try {
     const { username, password } = req.body
 
@@ -45,4 +47,6 @@ export const login = (req, res, next) => {
   } catch (error) {
     next(error)
   }
-}
+})
+
+export default router
