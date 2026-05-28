@@ -8,7 +8,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key'
 router.post('/', (req, res, next) => {
   try {
     const { username, password } = req.body
-
+    console.log(username, password)
     if (!username || !password) {
       return res.status(400).json({ code: 400, message: '请输入用户名和密码' })
     }
