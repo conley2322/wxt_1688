@@ -11,20 +11,21 @@ const app = express()
 // Middlewares
 app.use(cors(config.cors))
 app.use(express.json())
-app.use(logger)
-
+app.use(express.urlencoded({ extended: true }));
 // 挂载 db 到 req
 app.use((req, res, next) => {
-    req.db = {
-        // 查询多条
-        query: (sql, params = []) => db.prepare(sql).all(...params),
-        // 查询单条
-        get: (sql, params = []) => db.prepare(sql).get(...params),
-        // 执行增删改
-        run: (sql, params = []) => db.prepare(sql).run(...params)
-    }
+    req.user_id = req.body.user_id || null,
+        req.db = {
+            // 查询多条
+            query: (sql, params = []) => db.prepare(sql).all(...params),
+            // 查询单条
+            get: (sql, params = []) => db.prepare(sql).get(...params),
+            // 执行增删改
+            run: (sql, params = []) => db.prepare(sql).run(...params)
+        }
     next()
 })
+app.use(logger)
 
 // 注册路由
 app.use('/api', router)
