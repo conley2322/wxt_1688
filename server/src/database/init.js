@@ -31,6 +31,7 @@ db.exec(`
 //   id        UUID主键
 //   name      供应商名称（唯一）
 //   address   供应商地址
+//   memberId  1688会员ID
 //   created_at 创建时间
 //   updated_at 更新时间
 // ============================================================
@@ -39,6 +40,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     address TEXT,
+    memberId TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
@@ -144,17 +146,17 @@ db.exec(`
 
 // ============================================================
 // 8. product_comments — 商品评论
-//   id         UUID主键
-//   product_id 商品ID
-//   user_id    评论者用户ID
-//   text       评论内容
-//   img        是否有图片 1=有 0=无
+//   id        UUID主键
+//   offer_id  1688商品ID
+//   user_id   评论者用户ID
+//   text      评论内容
+//   img       是否有图片 1=有 0=无
 //   created_at 创建时间
 // ============================================================
 db.exec(`
   CREATE TABLE IF NOT EXISTS product_comments (
     id TEXT PRIMARY KEY,
-    product_id TEXT NOT NULL,
+    offer_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     text TEXT NOT NULL,
     img INTEGER DEFAULT 0,
@@ -182,17 +184,17 @@ db.exec(`
 
 // ============================================================
 // 10. product_tags — 商品↔标签关联
-//   id          UUID主键
-//   product_id  商品ID
-//   tag_id      标签ID
-//   visible     是否可见 1=显示 0=隐藏
-//   tag_user    打标签的用户ID
+//   id         UUID主键
+//   offer_id   1688商品ID
+//   tag_id     标签ID
+//   visible    是否可见 1=显示 0=隐藏
+//   tag_user   打标签的用户ID
 //   assigned_at 分配时间
 // ============================================================
 db.exec(`
   CREATE TABLE IF NOT EXISTS product_tags (
     id TEXT PRIMARY KEY,
-    product_id TEXT NOT NULL,
+    offer_id TEXT NOT NULL,
     tag_id TEXT NOT NULL,
     visible INTEGER DEFAULT 1,
     tag_user TEXT,
@@ -222,15 +224,15 @@ db.exec(`
 
 // ============================================================
 // 12. view_records — 浏览记录
-//   id         UUID主键
-//   product_id 商品ID
-//   user_id    浏览者用户ID
-//   viewed_at  浏览时间
+//   id        UUID主键
+//   offer_id  1688商品ID
+//   user_id   浏览者用户ID
+//   viewed_at 浏览时间
 // ============================================================
 db.exec(`
   CREATE TABLE IF NOT EXISTS view_records (
     id TEXT PRIMARY KEY,
-    product_id TEXT NOT NULL,
+    offer_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     viewed_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
@@ -354,32 +356,31 @@ for (const u of extraUsers) {
 
 // --- 供应商 ---
 const suppliers = [
-  { id: generateId(), name: '义乌市创意五金有限公司', address: '浙江省义乌市稠城街道福田路88号' },
-  { id: generateId(), name: '深圳市光明塑料制品厂', address: '广东省深圳市光明新区公明街道' },
-  { id: generateId(), name: '东莞市汇丰包装材料有限公司', address: '广东省东莞市厚街镇家具大道12号' },
+  { id: generateId(), name: '义乌市创意五金有限公司', address: '浙江省义乌市稠城街道福田路88号', memberId: 'b2b-290190276977744' },
+  { id: generateId(), name: '深圳市光明塑料制品厂', address: '广东省深圳市光明新区公明街道', memberId: 'b2b-290190276977745' },
+  { id: generateId(), name: '东莞市汇丰包装材料有限公司', address: '广东省东莞市厚街镇家具大道12号', memberId: 'b2b-290190276977746' },
 ]
-const insertSupplier = db.prepare('INSERT OR IGNORE INTO suppliers (id, name, address) VALUES (?, ?, ?)')
+const insertSupplier = db.prepare('INSERT OR IGNORE INTO suppliers (id, name, address, memberId) VALUES (?, ?, ?, ?)')
 for (const s of suppliers) {
-  insertSupplier.run(s.id, s.name, s.address)
+  insertSupplier.run(s.id, s.name, s.address, s.memberId)
 }
 
 // --- 商品 ---
 const products = [
-  { offer_id: 'offer_89012345', title: '不锈钢户外水壶 750ml' },
-  { offer_id: 'offer_89012346', title: '便携式折叠帐篷 3-4人款' },
-  { offer_id: 'offer_89012347', title: '铝合金登山杖 碳素伸缩' },
-  { offer_id: 'offer_89012348', title: '多功能野营炊具套装' },
+  { offer_id: '89012345', title: '不锈钢户外水壶 750ml' },
+  { offer_id: '89012346', title: '便携式折叠帐篷 3-4人款' },
+  { offer_id: '89012347', title: '铝合金登山杖 碳素伸缩' },
+  { offer_id: '89012348', title: '多功能野营炊具套装' },
 ]
-const insertProduct = db.prepare('INSERT OR IGNORE INTO products (offer_id, title) VALUES (?, ?)')
-let productIds = []
+const productIds = []
 for (const p of products) {
-  const info = insertProduct.run(p.offer_id, p.title)
-  if (info.changes > 0) {
+  const existing = db.prepare('SELECT id FROM products WHERE offer_id = ?').get(p.offer_id)
+  if (!existing) {
+    const info = db.prepare('INSERT INTO products (offer_id, title) VALUES (?, ?)').run(p.offer_id, p.title)
     productIds.push(info.lastInsertRowid)
+  } else {
+    productIds.push(existing.id)
   }
-}
-if (productIds.length === 0) {
-  productIds = db.prepare('SELECT id FROM products').all().map(r => r.id)
 }
 
 // --- 标签池 ---
@@ -439,12 +440,18 @@ const productComments = [
   { product_idx: 2, user_idx: 2, text: '登山杖手感好，伸缩顺滑，重量可以接受。' },
   { product_idx: 3, user_idx: 1, text: '炊具套装很齐全，就是锅底容易粘。' },
 ]
-const insertPC = db.prepare('INSERT OR IGNORE INTO product_comments (id, product_id, user_id, text) VALUES (?, ?, ?, ?)')
 const pcIds = []
 for (const pc of productComments) {
-  const id = generateId()
-  insertPC.run(id, String(productIds[pc.product_idx]), String(userIds[pc.user_idx]), pc.text)
-  pcIds.push(id)
+  const existing = db.prepare('SELECT id FROM product_comments WHERE offer_id = ? AND user_id = ? AND text = ?')
+    .get(products[pc.product_idx].offer_id, String(userIds[pc.user_idx]), pc.text)
+  if (!existing) {
+    const id = generateId()
+    db.prepare('INSERT INTO product_comments (id, offer_id, user_id, text) VALUES (?, ?, ?, ?)')
+      .run(id, products[pc.product_idx].offer_id, String(userIds[pc.user_idx]), pc.text)
+    pcIds.push(id)
+  } else {
+    pcIds.push(existing.id)
+  }
 }
 
 // --- 供应商评论 ---
@@ -471,9 +478,13 @@ const productTagPairs = [
   { product_idx: 3, tag_idx: 1 },
   { product_idx: 3, tag_idx: 4 },
 ]
-const insertPT = db.prepare('INSERT OR IGNORE INTO product_tags (id, product_id, tag_id, tag_user) VALUES (?, ?, ?, ?)')
 for (const pt of productTagPairs) {
-  insertPT.run(generateId(), String(productIds[pt.product_idx]), tagIds[pt.tag_idx], String(userIds[0]))
+  const existing = db.prepare('SELECT id FROM product_tags WHERE offer_id = ? AND tag_id = ?')
+    .get(products[pt.product_idx].offer_id, tagIds[pt.tag_idx])
+  if (!existing) {
+    db.prepare('INSERT INTO product_tags (id, offer_id, tag_id, tag_user) VALUES (?, ?, ?, ?)')
+      .run(generateId(), products[pt.product_idx].offer_id, tagIds[pt.tag_idx], String(userIds[0]))
+  }
 }
 
 // --- 供应商标签关联 ---
@@ -498,9 +509,13 @@ const viewRecords = [
   { product_idx: 3, user_idx: 0 },
   { product_idx: 3, user_idx: 2 },
 ]
-const insertVR = db.prepare('INSERT OR IGNORE INTO view_records (id, product_id, user_id) VALUES (?, ?, ?)')
 for (const vr of viewRecords) {
-  insertVR.run(generateId(), String(productIds[vr.product_idx]), String(userIds[vr.user_idx]))
+  const existing = db.prepare('SELECT id FROM view_records WHERE offer_id = ? AND user_id = ?')
+    .get(products[vr.product_idx].offer_id, String(userIds[vr.user_idx]))
+  if (!existing) {
+    db.prepare('INSERT INTO view_records (id, offer_id, user_id) VALUES (?, ?, ?)')
+      .run(generateId(), products[vr.product_idx].offer_id, String(userIds[vr.user_idx]))
+  }
 }
 
 // --- 供应商合作标记 ---

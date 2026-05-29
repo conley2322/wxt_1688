@@ -6,11 +6,15 @@ router.post('/', (req, res) => {
     const id = crypto.randomUUID()
 
     try {
-        req.db.run(
-            'INSERT INTO product_comments (id, product_id, user_id, text,img) VALUES (?, ?, ?, ?, ?)',
-            [id, req.body.product_id, req.body.user_id, req.body.text, req.body.img]
+        const result = req.db.run(
+            'INSERT INTO product_comments (id, offer_id, user_id, text,img) VALUES (?, ?, ?, ?, ?)',
+            [id, req.body.offer_id, req.body.user_id, req.body.text, req.body.img]
         )
-        res.json({ message: '商品添加成功' })
+        if (result.changes === 1) {
+            res.json({ message: '商品添加成功', id: id })
+        } else {
+            res.status(500).json({ error: '报错了' })
+        }
     } catch (error) {
         console.log(error)
     }

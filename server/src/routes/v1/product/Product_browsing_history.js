@@ -6,8 +6,8 @@ router.post('/', (req, res) => {
     try {
         const id = crypto.randomUUID()
         const result = req.db.run(
-            'INSERT INTO view_records (id, product_id, user_id) VALUES (?, ?, ?)',
-            [id, req.body.product_id, req.user_id]
+            'INSERT INTO view_records (id, offer_id, user_id) VALUES (?, ?, ?)',
+            [id, req.body.offer_id, req.user_id]
         )
         console.log(result)
         if (result.changes === 1) {
