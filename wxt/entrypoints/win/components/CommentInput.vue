@@ -2,51 +2,57 @@
   <div class="rich-editor-wrap" :class="{ fullscreen: isFullscreen }">
     <div class="editor-header">
       <div class="editor-avatar" :style="{ background: userColor }">{{ userInitial }}</div>
+      <div class="editor-toolbar">
+        <button class="tool-btn" @click="exec('bold')" title="加粗"><b>B</b></button>
+        <button class="tool-btn" @click="exec('italic')" title="斜体"><i>I</i></button>
+        <button class="tool-btn" @click="exec('strikeThrough')" title="删除线"><s>S</s></button>
+        <span class="tool-sep"></span>
+        <button class="tool-btn" @click="exec('insertUnorderedList')" title="无序列表">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+            <circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/>
+          </svg>
+        </button>
+        <button class="tool-btn" @click="exec('insertOrderedList')" title="有序列表">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/>
+            <text x="3" y="8" font-size="8" fill="currentColor" stroke="none">1</text>
+            <text x="3" y="14" font-size="8" fill="currentColor" stroke="none">2</text>
+            <text x="3" y="20" font-size="8" fill="currentColor" stroke="none">3</text>
+          </svg>
+        </button>
+      </div>
       <div class="editor-actions">
         <button class="action-btn fullscreen-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏编辑'">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <template v-if="!isFullscreen">
-              <polyline points="15 3 21 3 21 9"/>
-              <polyline points="9 21 3 21 3 15"/>
-              <line x1="21" y1="3" x2="14" y2="10"/>
-              <line x1="3" y1="21" x2="10" y2="14"/>
+              <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+              <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
             </template>
             <template v-else>
-              <polyline points="4 14 10 14 10 20"/>
-              <polyline points="20 10 14 10 14 4"/>
-              <line x1="14" y1="10" x2="21" y2="3"/>
-              <line x1="3" y1="21" x2="10" y2="14"/>
+              <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/>
+              <line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>
             </template>
           </svg>
         </button>
-        <button class="action-btn send-btn" :disabled="isEmpty" @click="submit">
-          {{ sendLabel }}
-        </button>
+        <button class="action-btn send-btn" :disabled="isEmpty" @click="submit">{{ sendLabel }}</button>
       </div>
     </div>
-    <div class="editor-container">
-      <Toolbar
-        v-if="editor"
-        class="editor-toolbar"
-        :editor="editor"
-        :defaultConfig="toolbarConfig"
-        mode="default"
-      />
-      <Editor
-        class="editor-content"
-        v-model="html"
-        :defaultConfig="editorConfig"
-        mode="default"
-        @onCreated="onCreated"
-      />
-    </div>
+    <div
+      ref="editorRef"
+      class="editor-content"
+      :class="{ 'is-fullscreen': isFullscreen }"
+      contenteditable="true"
+      :data-placeholder="placeholder"
+      @input="onInput"
+      @keydown.enter.meta="submit"
+      @keydown.enter.ctrl="submit"
+    ></div>
   </div>
 </template>
 
 <script setup>
-import { ref, shallowRef, computed, onBeforeUnmount, watch } from 'vue'
-import { Editor, Toolbar } from '@wangeditor/editor-for-vue'
-import '@wangeditor/editor/dist/css/style.css'
+import { ref, computed, watch } from 'vue'
 
 const props = defineProps({
   userInitial: { type: String, default: 'C' },
@@ -57,78 +63,52 @@ const props = defineProps({
 
 const emit = defineEmits(['send', 'update:text'])
 
-const editor = shallowRef(null)
-const html = ref('<p><br></p>')
+const editorRef = ref(null)
+const html = ref('')
 const isFullscreen = ref(false)
 
-const toolbarConfig = {
-  toolbarKeys: [
-    'headerSelect',
-    'bold',
-    'italic',
-    'through',
-    '|',
-    'bulletedList',
-    'numberedList',
-    '|',
-    'insertLink',
-  ],
-}
-
-const editorConfig = {
-  placeholder: props.placeholder,
-  MENU_CONF: {},
-}
-
 const isEmpty = computed(() => {
-  const text = html.value.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim()
-  return !text || text === ''
-})
-
-watch(() => props.placeholder, (val) => {
-  if (editor.value) {
-    editor.value.getConfig().placeholder = val
-  }
+  const text = html.value.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/\s/g, '')
+  return !text
 })
 
 watch(html, (val) => {
   emit('update:text', val)
 })
 
-function onCreated(e) {
-  editor.value = e
+function exec(command, value) {
+  document.execCommand(command, false, value || null)
+  editorRef.value?.focus()
+}
+
+function onInput() {
+  html.value = editorRef.value?.innerHTML || ''
 }
 
 function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value
-  if (editor.value) {
-    setTimeout(() => editor.value.focus(), 100)
-  }
+  setTimeout(() => editorRef.value?.focus(), 100)
 }
 
 function setText(content) {
-  if (editor.value) {
-    editor.value.setHtml(content)
+  if (editorRef.value) {
+    editorRef.value.innerHTML = content || ''
+    html.value = content || ''
   }
 }
 
 function submit() {
-  const content = html.value.trim()
-  if (!content || content === '<p><br></p>') return
+  const content = (editorRef.value?.innerHTML || '').trim()
+  const text = content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/\s/g, '')
+  if (!text) return
   emit('send', content)
-  if (editor.value) {
-    editor.value.setHtml('<p><br></p>')
+  if (editorRef.value) {
+    editorRef.value.innerHTML = ''
+    html.value = ''
   }
 }
 
 defineExpose({ setText, toggleFullscreen })
-
-onBeforeUnmount(() => {
-  if (editor.value) {
-    editor.value.destroy()
-    editor.value = null
-  }
-})
 </script>
 
 <style scoped>
@@ -139,28 +119,17 @@ onBeforeUnmount(() => {
 }
 .rich-editor-wrap.fullscreen {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  top: 0; left: 0; right: 0; bottom: 0;
   z-index: 2147483647;
   display: flex;
   flex-direction: column;
-  background: #fff;
-}
-.rich-editor-wrap.fullscreen .editor-container {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-.rich-editor-wrap.fullscreen .editor-content {
-  flex: 1;
 }
 .editor-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 12px;
+  flex-shrink: 0;
 }
 .editor-avatar {
   width: 28px;
@@ -173,6 +142,35 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-weight: 600;
   flex-shrink: 0;
+}
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tool-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+.tool-btn:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+.tool-sep {
+  width: 1px;
+  height: 16px;
+  background: #e0e0e0;
+  margin: 0 2px;
 }
 .editor-actions {
   display: flex;
@@ -213,21 +211,32 @@ onBeforeUnmount(() => {
 .send-btn:not(:disabled):hover {
   background: #4096ff;
 }
-.editor-container {
-  border-top: 1px solid #f0f0f0;
-}
-.editor-toolbar {
-  border-bottom: 1px solid #f0f0f0 !important;
-}
 .editor-content {
-  min-height: 60px;
-  max-height: 150px;
+  min-height: 48px;
+  max-height: 120px;
   overflow-y: auto;
+  padding: 6px 12px 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #333;
+  outline: none;
 }
-.fullscreen .editor-content {
+.editor-content.is-fullscreen {
+  flex: 1;
   max-height: none;
+  padding: 16px 24px;
+  font-size: 15px;
 }
-:deep(.w-e-text-container p) {
+.editor-content:empty::before {
+  content: attr(data-placeholder);
+  color: #ccc;
+  pointer-events: none;
+}
+.editor-content:focus {
+  background: #fafafa;
+}
+:deep(ul), :deep(ol) {
+  padding-left: 20px;
   margin: 4px 0;
 }
 </style>

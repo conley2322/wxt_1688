@@ -15,9 +15,4 @@ export default defineConfig({
       '@stores': '/stores',
     },
   },
-  vite: () => ({
-    optimizeDeps: {
-      include: ['@wangeditor/editor', '@wangeditor/editor-for-vue'],
-    },
-  }),
 });
