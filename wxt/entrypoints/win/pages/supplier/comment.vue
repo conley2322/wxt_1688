@@ -104,6 +104,20 @@ function onSwitchToComment() {
     })
   }
 }
+
+// ── 编辑/删除评论 ──
+function handleEditComment(comment) {
+  inputMode.value = 'comment'
+  nextTick(() => {
+    commentInputRef.value?.setText(comment.text)
+  })
+}
+
+function handleDeleteComment(commentId) {
+  store.deleteSupplierComment(commentId)
+  inputMode.value = 'comment'
+  commentInputRef.value?.setText('')
+}
 </script>
 
 <template>
@@ -150,6 +164,8 @@ function onSwitchToComment() {
         :comment="c"
         :currentUser="store.currentUser.name"
         @toggle-like="(id) => store.toggleSupplierLike(id)"
+        @edit="handleEditComment"
+        @delete="handleDeleteComment"
       />
       <div v-if="filteredComments.length === 0" class="empty">暂无评论</div>
     </div>

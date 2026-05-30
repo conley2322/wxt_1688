@@ -183,6 +183,14 @@ export const useApiStore = defineStore('api', () => {
     if (cmt) cmt.text = newText
   }
 
+  function deleteProductComment(commentId) {
+    productComments.value = productComments.value.filter(c => c.id !== commentId)
+  }
+
+  function deleteSupplierComment(commentId) {
+    supplierComments.value = supplierComments.value.filter(c => c.id !== commentId)
+  }
+
   function toggleSupplierLike(commentId) {
     const cmt = supplierComments.value.find(c => c.id === commentId)
     if (!cmt) return
@@ -244,6 +252,8 @@ export const useApiStore = defineStore('api', () => {
     toggleLike,
     addSupplierComment,
     updateSupplierComment,
+    deleteProductComment,
+    deleteSupplierComment,
     toggleSupplierLike,
     supplierCooperated,
     toggleCooperation,

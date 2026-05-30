@@ -9,8 +9,26 @@
       <div class="cmt-text">{{ comment.text }}</div>
       <div class="cmt-actions">
         <span class="cmt-like" :class="{ liked }" @click.stop="$emit('toggle-like', comment.id)">
-          👍 {{ comment.likes > 0 ? comment.likes : '' }}
+          <svg width="12" height="12" viewBox="0 0 24 24" :fill="liked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2">
+            <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/>
+            <path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
+          </svg>
+          {{ comment.likes > 0 ? comment.likes : '' }}
         </span>
+        <template v-if="isMine">
+          <span class="cmt-action-btn" @click.stop="$emit('edit', comment)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </span>
+          <span class="cmt-action-btn cmt-delete-btn" @click.stop="$emit('delete', comment.id)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </span>
+        </template>
       </div>
     </div>
   </div>
@@ -24,11 +42,13 @@ const props = defineProps({
   currentUser: { type: String, default: '' },
 })
 
-defineEmits(['toggle-like'])
+defineEmits(['toggle-like', 'edit', 'delete'])
 
 const liked = computed(() =>
   props.comment.liked_by && props.comment.liked_by.includes(props.currentUser)
 )
+
+const isMine = computed(() => props.comment.user_name === props.currentUser)
 
 const timeAgo = computed(() => {
   const now = new Date()
@@ -110,5 +130,23 @@ const timeAgo = computed(() => {
 }
 .cmt-like.liked {
   color: #ff6a00;
+}
+.cmt-action-btn {
+  font-size: 12px;
+  color: #bbb;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  transition: all 0.15s;
+}
+.cmt-action-btn:hover {
+  background: #f0f0f0;
+  color: #666;
+}
+.cmt-delete-btn:hover {
+  background: #fff0f0;
+  color: #e74c3c;
 }
 </style>
