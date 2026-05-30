@@ -10,7 +10,7 @@
         @keydown.enter="submit"
       />
     </div>
-    <button class="send-btn" :disabled="!text.trim()" @click="submit">发送</button>
+    <button class="send-btn" :disabled="!text.trim()" @click="submit">{{ sendLabel }}</button>
   </div>
 </template>
 
@@ -21,6 +21,7 @@ const props = defineProps({
   userInitial: { type: String, default: 'C' },
   userColor: { type: String, default: '#ff6a00' },
   placeholder: { type: String, default: '输入评论...' },
+  sendLabel: { type: String, default: '发送' },
 })
 
 const emit = defineEmits(['send'])

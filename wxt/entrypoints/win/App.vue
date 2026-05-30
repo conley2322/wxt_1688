@@ -1,93 +1,77 @@
 <!-- win/App.vue - 重构后主布局 -->
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DraggableWindow from './components/DraggableWindow.vue'
 import HsAvatarStack from '../../components/HsAvatarStack.vue'
-import { useApiStore } from '../stores/api/api.js'
-import { useDomStore } from '../stores/dom.js'
-import { useAuthStore } from '../stores/auth.js'
+import { useApiStore } from '@/stores/api/api.js'
+import { useDomStore } from '@/stores/dom.js'
+import stopLoading from '@/utils/stopLoading.js'
+
 
 
 const route = useRoute()
 const router = useRouter()
 const store = useApiStore()
 const domStore = useDomStore()
-const authStore = useAuthStore()
-import { ajaxGet } from '../../utils/ajax.js'
-
+const viewerStats = ref([])
+const productDom = ref({})
+const currentTab = computed(() => {
+  if (route.path.startsWith('/product')) return 'product'
+  if (route.path.startsWith('/supplier')) return 'supplier'
+  if (route.path.startsWith('/analysis')) return 'analysis'
+  return 'product'
+})
 // ── 挂载时从页面抓取真实数据 ──
 onMounted(async () => {
-  console.log('App mounted');
-  /*  const data = await domStore.get_dom_all_data()
-   if (data.title || data.CompanyName) {
-     store.productInfo.title = data.title
-     store.productInfo.supplier_name = data.CompanyName
-     store.productInfo.image_url = data.imageUrl
-     store.productInfo.product_id = data.productId
-   } */
-  await ajaxGet()
-  /* await authStore.request(`/api/v1/products/Product_browsing_history/${store.productInfo.product_id}`, {
-    method: 'POST',
-    body: JSON.stringify({ userId: authStore.userId })
-  }) */
-
-})
-// ── SubTab 列表 ──
-const subTabs = computed(() => {
-  switch (currentTab.value) {
-    case 'product':
-      return [
-        { path: '/product/comment', label: '评论' },
-        { path: '/product/tag', label: '标签' },
-      ]
-    case 'supplier':
-      return [
-        { path: '/supplier/comment', label: '评论' },
-        { path: '/supplier/tag', label: '标签' },
-      ]
-    case 'analysis':
-      return [
-        { path: '/analysis/views', label: '用户浏览量' },
-        { path: '/analysis/records', label: '浏览记录' },
-      ]
-    default:
-      return []
+  console.log('App mounted win页面')
+  stopLoading()// 停止页面加载，刷新按钮应停止转圈
+  const data = await domStore.get_dom_all_data()
+  console.log(data)
+  productDom.value = data
+  const res = await store.ajax('/api/v1/products/Product_browsing_history', 'POST', {
+    offer_id: data.productId,
+  })
+  console.log('ajax: 返回数据', res)
+  // 处理返回的浏览历史数据
+  if (res && Array.isArray(res.data)) {
+    viewerStats.value = res.data.map(item => ({
+      initial: (item.name || item.user_name || 'U').charAt(0).toUpperCase(),
+      name: item.name || item.user_name || '用户',
+      count: item.count || item.view_count || 1
+    }))
   }
 })
 
 // ── 导航到 Tab ──
 function goToTab(tab) {
   switch (tab) {
-    case 'product': router.push('/product/comment'); break
-    case 'supplier': router.push('/supplier/comment'); break
-    case 'analysis': router.push('/analysis/views'); break
+    case 'product': router.push('/product'); break
+    case 'supplier': router.push('/supplier'); break
+    case 'analysis': router.push('/analysis'); break
   }
 }
 
 // ── 浏览次数汇总 ──
 const totalViewCount = computed(() =>
-  store.viewerStats.reduce((s, v) => s + v.count, 0)
+  viewerStats.value.reduce((s, v) => s + v.count, 0)
 )
 
 // ── 头像栈数据 ──
 const viewerAvatars = computed(() =>
-  store.viewerStats.map(v => ({ initial: v.initial, tooltip: `${v.name} · ${v.count}次` }))
+  viewerStats.value.map(v => ({ initial: v.initial, tooltip: `${v.name} · ${v.count}次` }))
 )
 
-function isSubTabActive(path) {
-  return route.path === path
-}
 </script>
 
 <template>
   <DraggableWindow title="1688 协作">
     <!-- 产品概览区：左图右信息 -->
     <div class="product-overview">
-      <img class="overview-thumb" :src="store.productInfo.image_url" alt="" />
+      <img class="overview-thumb" :src="productDom.imageUrl" alt="" />
       <div class="overview-info">
-        <div class="overview-title" :title="store.productInfo.title">{{ store.productInfo.title }}</div>
-        <div class="overview-supplier" :title="store.productInfo.supplier_name">{{ store.productInfo.supplier_name }}
+        <div class="overview-title" :title="productDom.title">{{ productDom.title }}</div>
+        <div class="overview-supplier" :title="productDom.CompanyName">{{ productDom.CompanyName }}
         </div>
         <div class="overview-stats">
           <span class="view-count">👁 {{ totalViewCount }}次</span>
@@ -103,14 +87,6 @@ function isSubTabActive(path) {
         :key="tab.key" class="main-tab" :class="{ active: currentTab === tab.key }" @click="goToTab(tab.key)">
         {{ tab.label }}
       </span>
-    </div>
-
-    <!-- SubTab 栏 -->
-    <div class="sub-tabs">
-      <router-link v-for="st in subTabs" :key="st.path" :to="st.path" class="sub-tab"
-        :class="{ active: isSubTabActive(st.path) }">
-        {{ st.label }}
-      </router-link>
     </div>
 
     <!-- 内容区 -->
@@ -209,29 +185,6 @@ function isSubTabActive(path) {
   width: 24px;
   height: 2px;
   background: #1677ff;
-}
-
-/* ── SubTab 栏 ── */
-.sub-tabs {
-  display: flex;
-  border-bottom: 1px solid #f0f0f0;
-  background: #fafafa;
-}
-
-.sub-tab {
-  flex: 1;
-  text-align: center;
-  padding: 6px 0;
-  font-size: 12px;
-  color: #999;
-  text-decoration: none;
-  transition: all 0.2s;
-}
-
-.sub-tab.active {
-  color: #1677ff;
-  font-weight: 500;
-  background: #fff;
 }
 
 /* ── 内容区 ── */
