@@ -1,9 +1,9 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useApiStore } from '@/stores/api/api.js'
 import TagCloud from '@/entrypoints/win/components/TagCloud.vue'
 import TagPool from '@/entrypoints/win/components/TagPool.vue'
-import TagCreator from '@/entrypoints/win/components/TagCreator.vue'
+import InputSettings from '@/entrypoints/win/components/InputSettings.vue'
 import CommentItem from '@/entrypoints/win/components/CommentItem.vue'
 import CommentInput from '@/entrypoints/win/components/CommentInput.vue'
 import UserFilter from '@/entrypoints/win/components/UserFilter.vue'
@@ -12,6 +12,21 @@ const store = useApiStore()
 
 // ── 输入模式：'comment' | 'tag' ──
 const inputMode = ref('comment')
+
+// ── 标签创建配置 ──
+const tagFontColor = ref('#fff')
+const tagBgColor = ref('#2ecc71')
+const tagVisibility = ref('public')
+
+// 当前输入框文本（用于判断是否显示配置）
+const inputText = ref('')
+const commentInputRef = ref(null)
+
+// ── 是否已评论（一用户一评论） ──
+const myComment = computed(() =>
+  store.productComments.find(c => c.user_name === store.currentUser.name)
+)
+const isEditing = computed(() => inputMode.value === 'comment' && !!myComment.value)
 
 // ── 评论排序/筛选 ──
 const sortOrder = ref('newest')
@@ -44,18 +59,37 @@ const userList = computed(() => {
   return Object.entries(map).map(([name, count]) => ({ name, count }))
 })
 
-// ── 评论操作 ──
-function handleSendComment(text) {
-  store.addProductComment(text)
-}
+// ── 输入框配置 ──
+const inputPlaceholder = computed(() => {
+  if (inputMode.value === 'tag') return '输入标签名...'
+  return isEditing.value ? '修改你的评论...' : '写点什么...'
+})
+const inputSendLabel = computed(() => {
+  if (inputMode.value === 'tag') return '添加'
+  return isEditing.value ? '修改' : '评论'
+})
 
-function handleToggleLike(id) {
-  store.toggleLike(id)
+// ── 发送处理 ──
+function handleSend(text) {
+  if (inputMode.value === 'comment') {
+    if (isEditing.value) {
+      store.updateProductComment(myComment.value.id, text)
+    } else {
+      store.addProductComment(text)
+    }
+  } else {
+    // 标签模式：创建新标签并分配
+    const tag = store.createTag(text, tagFontColor.value, tagBgColor.value, tagVisibility.value)
+    store.assignTagToProduct(tag.id)
+    tagFontColor.value = '#fff'
+    tagBgColor.value = '#2ecc71'
+    tagVisibility.value = 'public'
+  }
 }
 
 // ── 标签操作 ──
-function handleTagLike(tagId) {
-  store.likeProductTag(tagId)
+function handleTagToggleLike(tagId) {
+  store.toggleProductTagLike(tagId)
 }
 
 function handleTagRemove(tagId) {
@@ -66,24 +100,12 @@ function handleTagAssign(tagId) {
   store.assignTagToProduct(tagId)
 }
 
-function handleTagCreate({ text, fontColor, bgColor, visibility }) {
-  const tag = store.createTag(text, fontColor, bgColor, visibility)
-  store.assignTagToProduct(tag.id)
-}
-
-// ── 输入框配置 ──
-const inputPlaceholder = computed(() =>
-  inputMode.value === 'comment' ? '输入评论...' : '输入标签名...'
-)
-const inputSendLabel = computed(() =>
-  inputMode.value === 'comment' ? '评论' : '添加'
-)
-
-function handleInputSend(text) {
-  if (inputMode.value === 'comment') {
-    handleSendComment(text)
-  } else {
-    handleTagCreate({ text, fontColor: '#fff', bgColor: '#2ecc71', visibility: 'public' })
+function onSwitchToComment() {
+  inputMode.value = 'comment'
+  if (myComment.value) {
+    nextTick(() => {
+      commentInputRef.value?.setText(myComment.value.text)
+    })
   }
 }
 </script>
@@ -94,14 +116,22 @@ function handleInputSend(text) {
     <TagCloud
       :tags="store.productAssignedTags"
       :currentUser="store.currentUser.name"
-      @like="handleTagLike"
+      @toggle-like="handleTagToggleLike"
       @remove="handleTagRemove"
     />
 
     <!-- 评论工具栏 -->
     <div class="toolbar">
       <UserFilter :users="userList" @apply="(u) => filterUsers = u" />
-      <span class="sort-btn" @click="toggleSort">⏱ {{ sortLabel }}▼</span>
+      <span class="sort-btn" @click="toggleSort">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 6h18M3 12h12M3 18h6"/>
+        </svg>
+        {{ sortLabel }}
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </span>
     </div>
 
     <!-- 评论列表 -->
@@ -111,42 +141,64 @@ function handleInputSend(text) {
         :key="c.id"
         :comment="c"
         :currentUser="store.currentUser.name"
-        @toggle-like="handleToggleLike"
+        @toggle-like="(id) => store.toggleLike(id)"
       />
       <div v-if="filteredComments.length === 0" class="empty">暂无评论</div>
     </div>
 
-    <!-- 标签模式：标签池 + 创建器 -->
-    <template v-if="inputMode === 'tag'">
-      <TagPool
-        :availableTags="store.productAvailableTags"
-        :assignedTags="store.productAssignedTags"
-        @assign="handleTagAssign"
-        @remove="handleTagRemove"
-      />
-      <TagCreator @create="handleTagCreate" />
-    </template>
+    <!-- 标签模式：标签池 -->
+    <TagPool
+      v-if="inputMode === 'tag'"
+      :availableTags="store.productAvailableTags"
+      :assignedTags="store.productAssignedTags"
+      @assign="handleTagAssign"
+      @remove="handleTagRemove"
+    />
 
     <!-- 输入区 -->
     <div class="input-area">
+      <!-- 标签创建配置（仅标签模式且有输入内容时显示） -->
+      <InputSettings
+        v-if="inputMode === 'tag' && inputText.trim()"
+        :fontColor="tagFontColor"
+        :bgColor="tagBgColor"
+        :visibility="tagVisibility"
+        @update:fontColor="tagFontColor = $event"
+        @update:bgColor="tagBgColor = $event"
+        @update:visibility="tagVisibility = $event"
+      />
+
       <CommentInput
+        ref="commentInputRef"
         :userInitial="store.currentUser.initial"
         :userColor="store.currentUser.color"
         :placeholder="inputPlaceholder"
         :sendLabel="inputSendLabel"
-        @send="handleInputSend"
+        @send="handleSend"
+        @update:text="inputText = $event"
       />
       <div class="mode-switch">
         <span
           class="mode-btn"
           :class="{ active: inputMode === 'comment' }"
-          @click="inputMode = 'comment'"
-        >评论 ▾</span>
+          @click="onSwitchToComment"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          评论
+        </span>
         <span
           class="mode-btn"
           :class="{ active: inputMode === 'tag' }"
           @click="inputMode = 'tag'"
-        >标签 ▾</span>
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+            <line x1="7" y1="7" x2="7.01" y2="7"/>
+          </svg>
+          标签
+        </span>
       </div>
     </div>
   </div>
@@ -167,6 +219,9 @@ function handleInputSend(text) {
   flex-shrink: 0;
 }
 .sort-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
   font-size: 12px;
   color: #666;
   cursor: pointer;
@@ -197,6 +252,9 @@ function handleInputSend(text) {
   padding: 0 12px 6px;
 }
 .mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
   font-size: 11px;
   color: #999;
   cursor: pointer;

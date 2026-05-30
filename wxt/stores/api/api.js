@@ -21,8 +21,8 @@ export const useApiStore = defineStore('api', () => {
 
   // ── 商品已分配标签 ──
   const productAssignedTags = ref([
-    { id: 'tag_1', text: '可深度合作', font_color: '#fff', bg_color: '#2ecc71', visibility: 'public', creator: 'Conley', created_at: '2026-05-10T08:00:00Z', like_count: 2, added_by: 'Conley' },
-    { id: 'tag_2', text: '价格偏高', font_color: '#fff', bg_color: '#ff6a00', visibility: 'public', creator: 'Conley', created_at: '2026-05-11T10:00:00Z', like_count: 1, added_by: 'Conley' },
+    { id: 'tag_1', text: '可深度合作', font_color: '#fff', bg_color: '#2ecc71', visibility: 'public', creator: 'Conley', created_at: '2026-05-10T08:00:00Z', like_count: 2, liked_by: ['张三', '李四'], added_by: 'Conley' },
+    { id: 'tag_2', text: '价格偏高', font_color: '#fff', bg_color: '#ff6a00', visibility: 'public', creator: 'Conley', created_at: '2026-05-11T10:00:00Z', like_count: 1, liked_by: ['李四'], added_by: 'Conley' },
   ])
 
   // ── 商品可用标签 ──
@@ -32,9 +32,9 @@ export const useApiStore = defineStore('api', () => {
 
   // ── 供应商已分配标签 ──
   const supplierAssignedTags = ref([
-    { id: 'tag_6', text: '优质供应商', font_color: '#fff', bg_color: '#2ecc71', visibility: 'public', creator: '张三', created_at: '2026-05-15T08:30:00Z', like_count: 5, added_by: 'Conley' },
-    { id: 'tag_3', text: '交期长', font_color: '#fff', bg_color: '#e74c3c', visibility: 'public', creator: 'Conley', created_at: '2026-05-12T09:00:00Z', like_count: 3, added_by: 'Conley' },
-    { id: 'tag_5', text: '响应快', font_color: '#fff', bg_color: '#1abc9c', visibility: 'public', creator: 'Conley', created_at: '2026-05-14T11:00:00Z', like_count: 1, added_by: 'Conley' },
+    { id: 'tag_6', text: '优质供应商', font_color: '#fff', bg_color: '#2ecc71', visibility: 'public', creator: '张三', created_at: '2026-05-15T08:30:00Z', like_count: 5, liked_by: ['Conley', '张三', '李四', 'Alex', 'Tom'], added_by: 'Conley' },
+    { id: 'tag_3', text: '交期长', font_color: '#fff', bg_color: '#e74c3c', visibility: 'public', creator: 'Conley', created_at: '2026-05-12T09:00:00Z', like_count: 3, liked_by: ['张三', '李四', 'Alex'], added_by: 'Conley' },
+    { id: 'tag_5', text: '响应快', font_color: '#fff', bg_color: '#1abc9c', visibility: 'public', creator: 'Conley', created_at: '2026-05-14T11:00:00Z', like_count: 1, liked_by: ['张三'], added_by: 'Conley' },
   ])
 
   // ── 供应商可用标签 ──
@@ -76,14 +76,17 @@ export const useApiStore = defineStore('api', () => {
     productAssignedTags.value = productAssignedTags.value.filter(t => t.id !== tagId)
   }
 
-  function likeProductTag(tagId) {
+  function toggleProductTagLike(tagId) {
     const tag = productAssignedTags.value.find(t => t.id === tagId)
-    if (tag) tag.like_count++
-  }
-
-  function unlikeProductTag(tagId) {
-    const tag = productAssignedTags.value.find(t => t.id === tagId)
-    if (tag && tag.like_count > 0) tag.like_count--
+    if (!tag) return
+    const idx = tag.liked_by.indexOf(currentUser.value.name)
+    if (idx === -1) {
+      tag.liked_by.push(currentUser.value.name)
+      tag.like_count++
+    } else {
+      tag.liked_by.splice(idx, 1)
+      tag.like_count--
+    }
   }
 
   function assignTagToSupplier(tagId) {
@@ -96,14 +99,17 @@ export const useApiStore = defineStore('api', () => {
     supplierAssignedTags.value = supplierAssignedTags.value.filter(t => t.id !== tagId)
   }
 
-  function likeSupplierTag(tagId) {
+  function toggleSupplierTagLike(tagId) {
     const tag = supplierAssignedTags.value.find(t => t.id === tagId)
-    if (tag) tag.like_count++
-  }
-
-  function unlikeSupplierTag(tagId) {
-    const tag = supplierAssignedTags.value.find(t => t.id === tagId)
-    if (tag && tag.like_count > 0) tag.like_count--
+    if (!tag) return
+    const idx = tag.liked_by.indexOf(currentUser.value.name)
+    if (idx === -1) {
+      tag.liked_by.push(currentUser.value.name)
+      tag.like_count++
+    } else {
+      tag.liked_by.splice(idx, 1)
+      tag.like_count--
+    }
   }
 
   function toggleCooperation() {
@@ -167,6 +173,16 @@ export const useApiStore = defineStore('api', () => {
     })
   }
 
+  function updateProductComment(commentId, newText) {
+    const cmt = productComments.value.find(c => c.id === commentId)
+    if (cmt) cmt.text = newText
+  }
+
+  function updateSupplierComment(commentId, newText) {
+    const cmt = supplierComments.value.find(c => c.id === commentId)
+    if (cmt) cmt.text = newText
+  }
+
   function toggleSupplierLike(commentId) {
     const cmt = supplierComments.value.find(c => c.id === commentId)
     if (!cmt) return
@@ -217,17 +233,17 @@ export const useApiStore = defineStore('api', () => {
     deleteTag,
     assignTagToProduct,
     removeTagFromProduct,
-    likeProductTag,
-    unlikeProductTag,
+    toggleProductTagLike,
     assignTagToSupplier,
     removeTagFromSupplier,
-    likeSupplierTag,
-    unlikeSupplierTag,
+    toggleSupplierTagLike,
     productComments,
     supplierComments,
     addProductComment,
+    updateProductComment,
     toggleLike,
     addSupplierComment,
+    updateSupplierComment,
     toggleSupplierLike,
     supplierCooperated,
     toggleCooperation,

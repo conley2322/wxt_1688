@@ -15,7 +15,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 const props = defineProps({
   userInitial: { type: String, default: 'C' },
@@ -24,9 +24,13 @@ const props = defineProps({
   sendLabel: { type: String, default: '发送' },
 })
 
-const emit = defineEmits(['send'])
+const emit = defineEmits(['send', 'update:text'])
 const text = ref('')
 const inputRef = ref(null)
+
+watch(text, (val) => {
+  emit('update:text', val)
+})
 
 function submit() {
   const t = text.value.trim()
@@ -35,6 +39,12 @@ function submit() {
   text.value = ''
   inputRef.value?.focus()
 }
+
+function setText(val) {
+  text.value = val
+}
+
+defineExpose({ setText })
 </script>
 
 <style scoped>
