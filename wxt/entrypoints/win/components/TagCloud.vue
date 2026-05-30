@@ -8,9 +8,8 @@
         class="cloud-tag"
         :class="{ 'my-tag': tag.creator === currentUser, liked: isLiked(tag) }"
         :style="{ background: tag.bg_color, color: tag.font_color }"
+        :title="`标签：${tag.text}\n创建者：${tag.creator}\n创建时间：${formatDate(tag.created_at)}\n认同人数：${tag.like_count}人${isLiked(tag) ? '\n已点赞' : ''}`"
         @click="handleClick(tag)"
-        @mouseenter="hoveredTag = tag"
-        @mouseleave="hoveredTag = null"
       >
         {{ tag.text }}
 
@@ -21,22 +20,16 @@
           <line x1="1" y1="1" x2="23" y2="23"/>
         </svg>
 
-        <!-- 点赞心形图标 -->
-        <svg v-if="isLiked(tag)" class="tag-icon tag-like-icon" width="12" height="12" viewBox="0 0 24 24" :fill="tag.font_color" :stroke="tag.font_color" stroke-width="2">
-          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-        </svg>
-        <svg v-else class="tag-icon tag-like-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" :stroke="tag.font_color" stroke-width="2">
-          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-        </svg>
-
-        <!-- Tooltip -->
-        <div v-if="hoveredTag === tag" class="tag-tooltip">
-          <div>标签：{{ tag.text }}</div>
-          <div>创建者：{{ tag.creator }}</div>
-          <div>创建时间：{{ formatDate(tag.created_at) }}</div>
-          <div>认同人数：{{ tag.like_count }}人</div>
-          <div v-if="isLiked(tag)" class="tooltip-liked">❤️ 已点赞</div>
-        </div>
+        <!-- 点赞心形 + 数量（仅别人的标签显示数量） -->
+        <template v-if="tag.creator !== currentUser">
+          <svg v-if="isLiked(tag)" class="tag-icon tag-like-icon" width="12" height="12" viewBox="0 0 24 24" :fill="tag.font_color" :stroke="tag.font_color" stroke-width="2">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+          </svg>
+          <svg v-else class="tag-icon tag-like-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" :stroke="tag.font_color" stroke-width="2">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+          </svg>
+          <span class="tag-like-count">{{ tag.like_count }}</span>
+        </template>
       </span>
       <span v-if="sortedTags.length === 0" class="cloud-empty">暂无标签</span>
     </div>
@@ -44,7 +37,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 
 const props = defineProps({
   tags: { type: Array, required: true },
@@ -52,8 +45,6 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['toggle-like', 'remove'])
-
-const hoveredTag = ref(null)
 
 const sortedTags = computed(() => {
   const my = []
@@ -140,24 +131,9 @@ function formatDate(iso) {
 .cloud-tag:hover .tag-like-icon {
   transform: scale(1.2);
 }
-.tag-tooltip {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: #333;
-  color: #fff;
-  padding: 8px 10px;
-  border-radius: 6px;
-  font-size: 11px;
-  white-space: nowrap;
-  z-index: 99999;
-  line-height: 1.6;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-  pointer-events: none;
-}
-.tooltip-liked {
-  color: #ff6b6b;
+.tag-like-count {
+  font-size: 10px;
+  opacity: 0.8;
 }
 .cloud-empty {
   font-size: 12px;
