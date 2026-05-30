@@ -1,6 +1,5 @@
 import { defineConfig } from 'wxt';
 
-// See https://wxt.dev/api/config.html
 export default defineConfig({
   modules: ['@wxt-dev/module-vue'],
   //代理转发
@@ -8,4 +7,17 @@ export default defineConfig({
     host_permissions: ['http://localhost:3001/*'],
     permissions: ['storage'],
   },
+  //使用@来表示wxt项目根目录
+  resolve: {
+    alias: {
+      '@': '/',
+      '@entrypoints': '/entrypoints',
+      '@stores': '/stores',
+    },
+  },
+  vite: () => ({
+    optimizeDeps: {
+      include: ['@wangeditor/editor', '@wangeditor/editor-for-vue'],
+    },
+  }),
 });
