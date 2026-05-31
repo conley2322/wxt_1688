@@ -38,3 +38,8 @@ lerna-debug.log*
 .env.local
 .env.*.local
 
+# SSL Certificates
+server/certs/
+server/*.pem
+server/uploads/
+

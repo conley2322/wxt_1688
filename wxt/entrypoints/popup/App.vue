@@ -31,9 +31,9 @@ async function handleLogin() {// 处理登录
   error.value = ''
 
   try {
-    const baseUrl = serverAddress.value.trim().startsWith('http')
+    const baseUrl = serverAddress.value.trim().startsWith('https')
       ? serverAddress.value.trim()
-      : `http://${serverAddress.value.trim()}`
+      : `https://${serverAddress.value.trim()}`
 
     const res = await fetch(`${baseUrl}/api/v1/users/login`, {
       method: 'POST',
@@ -82,7 +82,7 @@ async function handleLogout() {
   error.value = ''
 }
 
-onMounted(async () => { 
+onMounted(async () => {
   await restoreSession()
   if (!isLoggedIn.value) {
     try {
