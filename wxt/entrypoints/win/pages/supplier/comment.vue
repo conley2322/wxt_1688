@@ -86,15 +86,17 @@ const inputSendLabel = computed(() => {
 
 // ── 发送处理 ──
 async function handleSend(text) {
+  console.log('[Supplier] handleSend 编辑:', isEditing.value, '供应商:', store.currentSupplierName)
   try {
     if (isEditing.value) {
       await store.updateSupplierComment(myComment.value.id, text)
-      await store.fetchSupplierComments(store.currentSupplierName)
+      await nextTick()
       isEditing.value = false
     } else {
       await store.addSupplierComment(store.currentSupplierName, text)
     }
   } catch (e) {
+    console.error('[Supplier] 发送失败:', e)
     ElMessage.error(e.message || '操作失败')
   }
 }
@@ -243,8 +245,6 @@ async function handleDeleteComment(commentId) {
       <CommentInput
         v-if="showCommentInput"
         ref="commentInputRef"
-        :userInitial="store.currentUser.initial"
-        :userColor="store.currentUser.color"
         :placeholder="inputPlaceholder"
         :sendLabel="inputSendLabel"
         @send="handleSend"

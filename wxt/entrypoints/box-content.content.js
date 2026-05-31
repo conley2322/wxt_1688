@@ -28,6 +28,15 @@ export default defineContentScript({
 
     const pinia = createPinia()
 
+    // ── Toast 提示 ──
+    function showToast(msg) {
+      const el = document.createElement('div')
+      el.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99999;background:#c9975c;color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,PingFang SC,Arial,sans-serif;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:opacity 0.3s;pointer-events:none;'
+      el.textContent = msg
+      document.body.appendChild(el)
+      setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300) }, 2000)
+    }
+
     // ── 渲染配置 ──
     // parent: 外层容器选择器
     // child:  要插入组件的子元素选择器（相对于 parent）
@@ -96,6 +105,8 @@ export default defineContentScript({
         const json = await res.json()
         if (json.code === 200) {
           Object.assign(batchCache, json.data)
+          const count = Object.keys(json.data).length
+          if (count > 0) showToast(`已加载 ${count} 个商品数据`)
         }
       } catch (e) {
         console.error('Box 批量查询失败:', e)

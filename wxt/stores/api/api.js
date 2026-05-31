@@ -167,11 +167,6 @@ export const useApiStore = defineStore('api', () => {
     return res.data
   }
 
-  async function updateProductComment(comment_id, text) {
-    const res = await ajax(`/api/v1/products/comments/${comment_id}`, 'PUT', { text })
-    return res
-  }
-
   async function deleteProductComment(comment_id) {
     const res = await ajax(`/api/v1/products/comments/${comment_id}`, 'DELETE')
     return res
@@ -216,6 +211,23 @@ export const useApiStore = defineStore('api', () => {
 
   async function updateSupplierComment(comment_id, text) {
     const res = await ajax(`/api/v1/suppliers/comments/${comment_id}`, 'PUT', { text })
+    // 触发 reactivity: 直接修改本地列表中的评论文本
+    const idx = supplierComments.value.findIndex(c => c.id === comment_id)
+    if (idx !== -1) {
+      const updated = { ...supplierComments.value[idx], text, updated_at: res.data?.updated_at || new Date().toISOString() }
+      supplierComments.value.splice(idx, 1, updated)
+    }
+    return res
+  }
+
+  async function updateProductComment(comment_id, text) {
+    const res = await ajax(`/api/v1/products/comments/${comment_id}`, 'PUT', { text })
+    // 触发 reactivity: 直接修改本地列表中的评论文本
+    const idx = productComments.value.findIndex(c => c.id === comment_id)
+    if (idx !== -1) {
+      const updated = { ...productComments.value[idx], text, updated_at: res.data?.updated_at || new Date().toISOString() }
+      productComments.value.splice(idx, 1, updated)
+    }
     return res
   }
 

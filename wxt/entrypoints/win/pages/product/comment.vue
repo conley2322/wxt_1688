@@ -5,7 +5,6 @@ import { useApiStore } from '@/stores/api/api.js'
 import TagCloud from '@/entrypoints/win/components/TagCloud.vue'
 
 import TagPool from '@/entrypoints/win/components/TagPool.vue'
-import InputSettings from '@/entrypoints/win/components/InputSettings.vue'
 import CommentItem from '@/entrypoints/win/components/CommentItem.vue'
 import CommentInput from '@/entrypoints/win/components/CommentInput.vue'
 import UserFilter from '@/entrypoints/win/components/UserFilter.vue'
@@ -91,7 +90,7 @@ async function handleSend(text) {
   try {
     if (isEditing.value) {
       await store.updateProductComment(myComment.value.id, text)
-      await store.fetchProductComments(store.currentOfferId)
+      await nextTick()
       isEditing.value = false
     } else {
       await store.addProductComment(store.currentOfferId, text)
@@ -233,8 +232,6 @@ async function handleDeleteComment(commentId) {
       <CommentInput
         v-if="showCommentInput"
         ref="commentInputRef"
-        :userInitial="store.currentUser.initial"
-        :userColor="store.currentUser.color"
         :placeholder="inputPlaceholder"
         :sendLabel="inputSendLabel"
         @send="handleSend"

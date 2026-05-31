@@ -20,7 +20,7 @@
         <button class="action-btn send-btn" :disabled="isEmpty" @click="submit">{{ sendLabel }}</button>
       </div>
     </div>
-    <div id="_editor_container" class="editor-container" :class="{ 'is-fullscreen': isFullscreen }"></div>
+    <div id="_editor_container" class="editor-container" :class="{ 'is-fullscreen': isFullscreen }" spellcheck="false"></div>
   </div>
 </template>
 
@@ -97,6 +97,7 @@ onMounted(async () => {
     html: '<p><br></p>',
     config: {
       placeholder: props.placeholder,
+      hoverbarKeys: {},
       onChange() {
         if (!editor) return
         const html = editor.getHtml()
@@ -159,18 +160,21 @@ onMounted(async () => {
         },
       },
     },
-    mode: 'default',
+    mode: 'simple',
   })
 
   // 创建两个工具栏（始终保持）
   toolbarNormal = createToolbar({
     editor, selector: '#_toolbar_normal',
-    config: { toolbarKeys: normalKeys }, mode: 'default',
+    config: { toolbarKeys: normalKeys }, mode: 'simple',
   })
   toolbarFull = createToolbar({
     editor, selector: '#_toolbar_full',
-    config: { toolbarKeys: FULL_TOOLBAR }, mode: 'default',
+    config: { toolbarKeys: FULL_TOOLBAR }, mode: 'simple',
   })
+
+  // 禁用选中弹出菜单
+  try { editor.disableHoverbar() } catch {}
 
   // 应用暂存的内容（编辑时 setText 可能在编辑器就绪前调用）
   if (pendingContent) {
