@@ -1,40 +1,37 @@
 <template>
-  <div class="user-filter">
-    <div class="filter-trigger" @click.stop="open = !open">
-      🔍
-      <span class="filter-label">{{ selectedNames.length ? `已选${selectedNames.length}人` : '搜索用户' }}</span>
-    </div>
-
-    <Teleport to="body">
-      <div v-if="open" class="filter-overlay" @click.stop="open = false">
-        <div class="filter-dropdown" @click.stop>
-          <input class="filter-search" v-model="searchText" placeholder="输入用户名..." />
-          <div class="filter-list">
-            <label v-for="u in filteredUsers" :key="u.name" class="filter-item">
-              <input type="checkbox" :value="u.name" v-model="selectedNames" />
-              <span class="filter-name">{{ u.name }}</span>
-              <span class="filter-count">({{ u.count }}条)</span>
-            </label>
-          </div>
-          <div class="filter-actions">
-            <button class="filter-btn clear-btn" @click="selectedNames = []">清除</button>
-            <button class="filter-btn apply-btn" @click="apply">应用筛选</button>
-          </div>
-        </div>
+  <el-popover placement="bottom-start" :width="240" trigger="click" :visible="open" @update:visible="open = $event">
+    <template #reference>
+      <span class="filter-trigger" @click="open = !open">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span class="filter-label">{{ selectedNames.length ? `已选${selectedNames.length}人` : '搜索用户' }}</span>
+      </span>
+    </template>
+    <div class="filter-popover">
+      <el-input v-model="searchText" placeholder="输入用户名..." size="small" clearable />
+      <div class="filter-list">
+        <label v-for="u in filteredUsers" :key="u.name" class="filter-item">
+          <input type="checkbox" :value="u.name" v-model="selectedNames" />
+          <span class="filter-name">{{ u.name }}</span>
+          <span class="filter-count">({{ u.count }}条)</span>
+        </label>
+        <div v-if="filteredUsers.length === 0" class="filter-empty">无匹配用户</div>
       </div>
-    </Teleport>
-  </div>
+      <div class="filter-actions">
+        <el-button size="small" @click="selectedNames = []">清除</el-button>
+        <el-button size="small" type="primary" @click="apply">应用</el-button>
+      </div>
+    </div>
+  </el-popover>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
 
 const props = defineProps({
-  users: { type: Array, required: true }, // [{ name, count }]
+  users: { type: Array, required: true },
 })
 
 const emit = defineEmits(['apply'])
-
 const open = ref(false)
 const searchText = ref('')
 const selectedNames = ref([])
@@ -51,99 +48,17 @@ function apply() {
 </script>
 
 <style scoped>
-.user-filter {
-  position: relative;
-}
 .filter-trigger {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-  color: #666;
+  display: flex; align-items: center; gap: 4px;
+  cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  font-size: 12px; color: #666;
 }
-.filter-trigger:hover {
-  background: #f0f0f0;
-}
-.filter-label {
-  font-size: 11px;
-  color: #999;
-}
-.filter-overlay {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  z-index: 2147483647;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0,0,0,0.2);
-}
-.filter-dropdown {
-  background: #fff;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
-  width: 240px;
-  max-height: 320px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.filter-search {
-  border: none;
-  border-bottom: 1px solid #f0f0f0;
-  padding: 10px 12px;
-  font-size: 13px;
-  outline: none;
-}
-.filter-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-.filter-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.filter-item:hover {
-  background: #f5f5f5;
-}
-.filter-name {
-  color: #333;
-}
-.filter-count {
-  color: #bbb;
-  font-size: 11px;
-}
-.filter-actions {
-  display: flex;
-  border-top: 1px solid #f0f0f0;
-}
-.filter-btn {
-  flex: 1;
-  padding: 8px;
-  border: none;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.clear-btn {
-  background: #fff;
-  color: #999;
-}
-.clear-btn:hover {
-  background: #f5f5f5;
-}
-.apply-btn {
-  background: #1677ff;
-  color: #fff;
-}
-.apply-btn:hover {
-  background: #4096ff;
-}
+.filter-trigger:hover { background: #f0f0f0; }
+.filter-label { font-size: 11px; color: #999; }
+.filter-list { max-height: 180px; overflow-y: auto; padding: 8px 0; }
+.filter-item { display: flex; align-items: center; gap: 6px; padding: 5px 0; font-size: 13px; cursor: pointer; }
+.filter-name { color: #333; }
+.filter-count { color: #bbb; font-size: 11px; }
+.filter-empty { color: #ccc; text-align: center; padding: 16px 0; font-size: 13px; }
+.filter-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; padding-top: 8px; border-top: 1px solid #f0f0f0; }
 </style>

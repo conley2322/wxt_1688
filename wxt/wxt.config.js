@@ -4,7 +4,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-vue'],
   //代理转发
   manifest: {
-    host_permissions: ['http://localhost:3001/*'],
+    host_permissions: ['http://localhost:3000/*', 'http://localhost:3001/*'],
     permissions: ['storage'],
   },
   //使用@来表示wxt项目根目录

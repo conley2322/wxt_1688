@@ -1,12 +1,10 @@
 import bcrypt from 'bcryptjs'
-import { generateId } from '../../../database/init.js'
 import { Router } from 'express'
 const router = Router()
 
-router.post('/', (req, res, next) => {
+router.post('/', (req, res) => {
   try {
-    const { username, email, password, color } = req.body
-
+    const { username, email, password, role } = req.body
     if (!username || !email || !password) {
       return res.status(400).json({ code: 400, message: '用户名、邮箱和密码不能为空' })
     }
@@ -16,16 +14,16 @@ router.post('/', (req, res, next) => {
       return res.status(409).json({ code: 409, message: '用户名已存在' })
     }
 
-    const id = generateId()
     const hashedPassword = bcrypt.hashSync(password, 10)
-    req.db.run(
-      'INSERT INTO users (id, username, email, password, color) VALUES (?, ?, ?, ?, ?)',
-      [id, username, email, hashedPassword, color || null]
+    const result = req.db.run(
+      'INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)',
+      [username, email, hashedPassword, role || 'user']
     )
 
-    res.status(201).json({ code: 201, data: { id }, message: '用户创建成功' })
+    res.json({ code: 200, data: { id: result.lastInsertRowid }, message: '用户创建成功' })
   } catch (error) {
-    next(error)
+    console.error(error)
+    res.status(500).json({ code: 500, message: '服务器错误' })
   }
 })
 

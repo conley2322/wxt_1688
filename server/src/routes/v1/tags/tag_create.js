@@ -10,6 +10,9 @@ router.post('/', (req, res) => {
     if (!text || !text.trim()) {
       return res.status(400).json({ code: 400, message: '标签名不能为空' })
     }
+    if (text.trim().length > 10) {
+      return res.status(400).json({ code: 400, message: '标签名不能超过10个字' })
+    }
 
     const id = crypto.randomUUID()
     req.db.run(

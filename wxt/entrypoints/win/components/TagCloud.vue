@@ -9,7 +9,7 @@
         :style="{ background: tag.bg_color, color: tag.font_color }"
         :title="tag.creator === currentUser ? `我的标签 · ${formatDate(tag.assigned_at)}` : `${tag.creator} 添加 · ${formatDate(tag.assigned_at)}`"
       >
-        {{ tag.text }}
+        {{ tag.text.length > 10 ? tag.text.slice(0, 10) + '…' : tag.text }}
 
         <!-- 私有标签标识 -->
         <svg v-if="tag.visibility === 'private'" class="tag-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -97,17 +97,15 @@ function formatDate(dateStr) {
   opacity: 0.7;
 }
 .tag-remove {
-  display: none;
+  display: inline-flex;
+  align-items: center;
   font-size: 14px;
   font-weight: 700;
   line-height: 1;
   margin-left: 1px;
-  opacity: 0.6;
+  opacity: 0.5;
 }
-.cloud-tag.my-tag:hover .tag-remove {
-  display: inline-flex;
-  align-items: center;
-}
+.tag-remove:hover { opacity: 1; }
 .tag-remove:hover {
   opacity: 1;
 }

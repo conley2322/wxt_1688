@@ -6,7 +6,7 @@
         <span class="cmt-name">{{ comment.username }}</span>
         <span class="cmt-time">{{ timeAgo }}</span>
       </div>
-      <div class="cmt-text" v-html="comment.text"></div>
+      <div class="cmt-text" v-html="resolvedHtml"></div>
       <div class="cmt-actions">
         <template v-if="isMine">
           <span class="cmt-action-btn" @click.stop="$emit('edit', comment)">
@@ -28,11 +28,46 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted, nextTick } from 'vue'
 
 const props = defineProps({
   comment: { type: Object, required: true },
   currentUser: { type: String, default: '' },
+})
+
+const resolvedHtml = ref(props.comment.text)
+
+onMounted(async () => {
+  const html = props.comment.text || ''
+  console.log('[CommentItem] 原始 HTML 长度:', html.length, '含uploads:', /\/uploads\//.test(html))
+  if (!/\/uploads\//.test(html)) { resolvedHtml.value = html; return }
+
+  let result = html
+  const imgRegex = /src="([^"]*\/uploads\/[^"]*)"/g
+  let match
+  let count = 0
+
+  while ((match = imgRegex.exec(html)) !== null) {
+    count++
+    const url = match[1]
+    console.log(`[CommentItem] 图片 #${count}:`, url.substring(0, 80))
+    try {
+      console.log('[CommentItem] 开始 fetch:', url.substring(0, 80))
+      const res = await fetch(url)
+      console.log('[CommentItem] fetch 结果:', res.status, res.statusText)
+      const blob = await res.blob()
+      console.log('[CommentItem] blob 大小:', blob.size)
+      const blobUrl = URL.createObjectURL(blob)
+      console.log('[CommentItem] blobUrl:', blobUrl.substring(0, 50))
+      result = result.replace(url, blobUrl)
+      console.log('[CommentItem] 替换成功')
+    } catch (e) {
+      console.error('[CommentItem] 图片加载失败:', e.message || e, url.substring(0, 80))
+    }
+  }
+
+  console.log('[CommentItem] 共处理', count, '张图片')
+  resolvedHtml.value = result
 })
 
 defineEmits(['edit', 'delete'])

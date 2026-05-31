@@ -11,7 +11,7 @@ router.delete('/:id', (req, res) => {
     if (!tag) {
       return res.status(404).json({ code: 404, message: '标签不存在' })
     }
-    if (String(tag.creator_id) !== String(user_id)) {
+    if (String(tag.creator_id) !== String(user_id) && req.user.role !== 'admin') {
       return res.status(403).json({ code: 403, message: '只能删除自己创建的标签' })
     }
 

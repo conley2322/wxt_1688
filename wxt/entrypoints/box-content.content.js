@@ -35,7 +35,8 @@ export default defineContentScript({
     const renderConfigs = [
       { parent: '.feeds-wrapper', child: '> a' },
       { parent: '[class*="offerListLayoutWrapper"]', child: '[class*="searchOfferWrapper"]' },
-      { parent: '.swiper-slide .list-padding', child: '.offer-card-container div' },
+      // 首页推荐/精选货源：卡片本身是 .offer-card-container，offerId 在 data-aplus-report 属性里
+      { parent: '.swiper-slide .list-padding', child: '.offer-card-container' },
     ]
 
     // 共享的批量数据缓存

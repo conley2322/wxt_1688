@@ -18,8 +18,8 @@ router.post('/', (req, res) => {
     if (!product) {
       // 不存在 → 创建
       req.db.run(
-        'INSERT INTO products (offer_id, title, main_img_url, supplier_name) VALUES (?, ?, ?, ?)',
-        [offer_id, title || null, main_img_url || null, supplier_name ? supplier_name.trim() : null]
+        'INSERT INTO products (offer_id, title, main_img_url, supplier_name, created_by) VALUES (?, ?, ?, ?, ?)',
+        [offer_id, title || null, main_img_url || null, supplier_name ? supplier_name.trim() : null, req.user.id]
       )
     } else {
       // 存在 → 补充空字段（每次浏览都可能获取到新数据）

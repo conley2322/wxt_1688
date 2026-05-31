@@ -20,6 +20,7 @@ db.exec(`
     email TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
     avatar TEXT,
+    role TEXT DEFAULT 'user',
     status INTEGER DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -86,6 +87,7 @@ db.exec(`
     title TEXT,
     main_img_url TEXT,
     supplier_name TEXT,
+    created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `)
@@ -342,8 +344,8 @@ if (adminUser) {
   // --- 管理员 ---
   const hashedPassword = bcrypt.hashSync('1', 10)
   db.prepare(
-    'INSERT INTO users (username, email, password) VALUES (?, ?, ?)'
-  ).run('1', 'admin@local.com', hashedPassword)
+    'INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)'
+  ).run('1', 'admin@local.com', hashedPassword, 'admin')
 
   // --- 额外用户 ---
   const extraUsers = [

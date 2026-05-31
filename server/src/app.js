@@ -10,8 +10,15 @@ const app = express()
 
 // Middlewares
 app.use(cors(config.cors))
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }))
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// 静态文件：上传的图片
+import path from 'path'
+import { fileURLToPath } from 'url'
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const uploadPath = path.join(__dirname, '../uploads')
+console.log('[app] 静态文件目录:', uploadPath)
+app.use('/uploads', express.static(uploadPath))
 // 挂载 db 到 req
 app.use((req, res, next) => {
     req.user_id = req.body.user_id || null,

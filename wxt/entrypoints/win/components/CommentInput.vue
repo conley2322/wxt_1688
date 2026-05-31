@@ -2,28 +2,10 @@
   <div class="rich-editor-wrap" :class="{ fullscreen: isFullscreen }">
     <div class="editor-header">
       <div class="editor-avatar" :style="{ background: userColor }">{{ userInitial }}</div>
-      <div class="editor-toolbar">
-        <button class="tool-btn" @click="exec('bold')" title="加粗"><b>B</b></button>
-        <button class="tool-btn" @click="exec('italic')" title="斜体"><i>I</i></button>
-        <button class="tool-btn" @click="exec('strikeThrough')" title="删除线"><s>S</s></button>
-        <span class="tool-sep"></span>
-        <button class="tool-btn" @click="exec('insertUnorderedList')" title="无序列表">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
-            <circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/>
-          </svg>
-        </button>
-        <button class="tool-btn" @click="exec('insertOrderedList')" title="有序列表">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/>
-            <text x="3" y="8" font-size="8" fill="currentColor" stroke="none">1</text>
-            <text x="3" y="14" font-size="8" fill="currentColor" stroke="none">2</text>
-            <text x="3" y="20" font-size="8" fill="currentColor" stroke="none">3</text>
-          </svg>
-        </button>
-      </div>
+      <div id="_toolbar_normal" class="toolbar-container" :style="{ display: isFullscreen ? 'none' : '' }"></div>
+      <div id="_toolbar_full" class="toolbar-container" :style="{ display: isFullscreen ? '' : 'none' }"></div>
       <div class="editor-actions">
-        <button class="action-btn fullscreen-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏编辑'">
+        <button v-if="canFullscreen" class="action-btn fullscreen-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏编辑'">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <template v-if="!isFullscreen">
               <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
@@ -38,21 +20,14 @@
         <button class="action-btn send-btn" :disabled="isEmpty" @click="submit">{{ sendLabel }}</button>
       </div>
     </div>
-    <div
-      ref="editorRef"
-      class="editor-content"
-      :class="{ 'is-fullscreen': isFullscreen }"
-      contenteditable="true"
-      :data-placeholder="placeholder"
-      @input="onInput"
-      @keydown.enter.meta="submit"
-      @keydown.enter.ctrl="submit"
-    ></div>
+    <div id="_editor_container" class="editor-container" :class="{ 'is-fullscreen': isFullscreen }"></div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { createEditor, createToolbar } from '@wangeditor/editor'
+import '@wangeditor/editor/dist/css/style.css'
 
 const props = defineProps({
   userInitial: { type: String, default: 'C' },
@@ -63,49 +38,183 @@ const props = defineProps({
 
 const emit = defineEmits(['send', 'update:text'])
 
-const editorRef = ref(null)
-const html = ref('')
+let editor = null
+let toolbarNormal = null
+let toolbarFull = null
+const isEmpty = ref(true)
 const isFullscreen = ref(false)
+const canFullscreen = ref(true)
+let pendingContent = null // 编辑器就绪前暂存的内容
+const urlMap = new Map() // blobUrl → serverUrl 映射，提交时替换
 
-const isEmpty = computed(() => {
-  const text = html.value.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/\s/g, '')
-  return !text
-})
+const FULL_TOOLBAR = [
+  'headerSelect', '|',
+  'bold', 'italic', 'underline', 'through', '|',
+  'color', 'bgColor', '|',
+  'fontSize', 'fontFamily', '|',
+  'bulletedList', 'numberedList', 'todo', '|',
+  'blockquote', 'codeBlock', '|',
+  'insertLink', 'insertImage', 'insertTable', '|',
+  'undo', 'redo', 'clearStyle',
+]
 
-watch(html, (val) => {
-  emit('update:text', val)
-})
+let normalKeys = ['bold', 'italic', 'underline', '|', 'bulletedList', 'numberedList']
 
-function exec(command, value) {
-  document.execCommand(command, false, value || null)
-  editorRef.value?.focus()
+function makeNormalKeys(cfg) {
+  if (!cfg) return ['bold', 'italic', 'underline', '|', 'bulletedList', 'numberedList']
+  const keys = []
+  if (cfg.bold) keys.push('bold')
+  if (cfg.italic) keys.push('italic')
+  if (cfg.underline) keys.push('underline')
+  if (cfg.strikethrough) keys.push('through')
+  if (cfg.heading) keys.push('headerSelect')
+  if (keys.length) keys.push('|')
+  if (cfg.bulletList) keys.push('bulletedList')
+  if (cfg.orderedList) keys.push('numberedList')
+  if (cfg.blockquote) keys.push('blockquote')
+  if (cfg.code) keys.push('codeBlock')
+  if (cfg.link || cfg.image) keys.push('|')
+  if (cfg.link) keys.push('insertLink')
+  if (cfg.image) keys.push('insertImage')
+  if (keys.length === 0) keys.push('bold')
+  return keys
 }
 
-function onInput() {
-  html.value = editorRef.value?.innerHTML || ''
-}
+onMounted(async () => {
+  await nextTick()
+
+  try {
+    const stored = await browser.storage.local.get('toolbarConfig')
+    if (stored.toolbarConfig) {
+      normalKeys = makeNormalKeys(stored.toolbarConfig)
+      if (stored.toolbarConfig.fullscreen !== false) canFullscreen.value = true
+    }
+  } catch {}
+
+  // 创建编辑器
+  editor = createEditor({
+    selector: '#_editor_container',
+    html: '<p><br></p>',
+    config: {
+      placeholder: props.placeholder,
+      onChange() {
+        if (!editor) return
+        const html = editor.getHtml()
+        const text = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim()
+        const hasImage = /<img[^>]+src=/.test(html)
+        isEmpty.value = !text && !hasImage
+        emit('update:text', html)
+      },
+      MENU_CONF: {
+        uploadImage: {
+          async customUpload(file, insertFn) {
+            console.log('[CommentInput upload] 文件大小:', file.size, '文件名:', file.name)
+            const reader = new FileReader()
+            reader.onload = async (e) => {
+              if (file.size < 10 * 1024) {
+                console.log('[CommentInput upload] <10KB, 使用 base64')
+                insertFn(e.target.result, file.name)
+                return
+              }
+              console.log('[CommentInput upload] >=10KB, 上传服务器')
+              try {
+                const stored = await browser.storage.local.get(['token', 'serverAddress'])
+                console.log('[CommentInput upload] serverAddress:', stored.serverAddress)
+                if (!stored.token) { console.log('[CommentInput upload] 无 token, fallback base64'); insertFn(e.target.result, file.name); return }
+                const uploadUrl = `${stored.serverAddress}/api/v1/upload/image`
+                console.log('[CommentInput upload] POST:', uploadUrl)
+                const res = await fetch(uploadUrl, {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${stored.token}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ image: e.target.result, fileName: file.name })
+                })
+                const data = await res.json()
+                console.log('[CommentInput upload] 响应:', data)
+                if (data.code === 200 && data.data?.url) {
+                  const fullUrl = stored.serverAddress + data.data.url
+                  console.log('[CommentInput upload] 服务器 URL:', fullUrl)
+                  // 立即 fetch 转 blob URL，绕过 HTTPS 混合内容限制
+                  try {
+                    const imgRes = await fetch(fullUrl)
+                    const blob = await imgRes.blob()
+                    const blobUrl = URL.createObjectURL(blob)
+                    urlMap.set(blobUrl, fullUrl)
+                    console.log('[CommentInput upload] blobUrl:', blobUrl.substring(0, 50), '→', fullUrl)
+                    insertFn(blobUrl, file.name)
+                  } catch (err) {
+                    console.error('[CommentInput upload] blob 转换失败:', err)
+                    insertFn(fullUrl, file.name)
+                  }
+                } else {
+                  console.log('[CommentInput upload] 上传失败, fallback base64')
+                  insertFn(e.target.result, file.name)
+                }
+              } catch (err) {
+                console.error('[CommentInput upload] 异常:', err)
+                insertFn(e.target.result, file.name)
+              }
+            }
+            reader.readAsDataURL(file)
+          },
+        },
+      },
+    },
+    mode: 'default',
+  })
+
+  // 创建两个工具栏（始终保持）
+  toolbarNormal = createToolbar({
+    editor, selector: '#_toolbar_normal',
+    config: { toolbarKeys: normalKeys }, mode: 'default',
+  })
+  toolbarFull = createToolbar({
+    editor, selector: '#_toolbar_full',
+    config: { toolbarKeys: FULL_TOOLBAR }, mode: 'default',
+  })
+
+  // 应用暂存的内容（编辑时 setText 可能在编辑器就绪前调用）
+  if (pendingContent) {
+    try { editor.setHtml(pendingContent) } catch {}
+    pendingContent = null
+  }
+})
+
+onBeforeUnmount(() => {
+  try { toolbarNormal?.destroy() } catch {}
+  try { toolbarFull?.destroy() } catch {}
+  try { editor?.destroy() } catch {}
+})
 
 function toggleFullscreen() {
   isFullscreen.value = !isFullscreen.value
-  setTimeout(() => editorRef.value?.focus(), 100)
+  nextTick(() => editor?.focus())
 }
 
 function setText(content) {
-  if (editorRef.value) {
-    editorRef.value.innerHTML = content || ''
-    html.value = content || ''
-  }
+  pendingContent = content
+  try {
+    if (editor) {
+      editor.setHtml(content || '<p><br></p>')
+      pendingContent = null
+    }
+  } catch {}
 }
 
 function submit() {
-  const content = (editorRef.value?.innerHTML || '').trim()
-  const text = content.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/\s/g, '')
-  if (!text) return
-  emit('send', content)
-  if (editorRef.value) {
-    editorRef.value.innerHTML = ''
-    html.value = ''
-  }
+  try {
+    let html = editor?.getHtml() || ''
+    // 将 blob URL 替换回服务器 URL，保证存到数据库的是可持久化的 URL
+    for (const [blobUrl, serverUrl] of urlMap) {
+      html = html.replaceAll(blobUrl, serverUrl)
+    }
+    console.log('[CommentInput submit] HTML 长度:', html.length, '含uploads:', /\/uploads\//.test(html))
+    const text = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim()
+    const hasImage = /<img[^>]+src=/.test(html)
+    if (!text && !hasImage) return
+    emit('send', html)
+    urlMap.clear()
+    editor?.setHtml('<p><br></p>')
+  } catch {}
 }
 
 defineExpose({ setText, toggleFullscreen })
@@ -113,130 +222,34 @@ defineExpose({ setText, toggleFullscreen })
 
 <style scoped>
 .rich-editor-wrap {
-  border-top: 1px solid #f0f0f0;
-  background: #fff;
-  flex-shrink: 0;
+  border-top: 1px solid #f0f0f0; background: #fff; flex-shrink: 0;
 }
 .rich-editor-wrap.fullscreen {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  z-index: 2147483647;
-  display: flex;
-  flex-direction: column;
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 2147483647; display: flex; flex-direction: column;
 }
-.editor-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  flex-shrink: 0;
-}
+.editor-header { display: flex; align-items: center; gap: 6px; padding: 6px 12px; flex-shrink: 0; }
 .editor-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  flex-shrink: 0;
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 11px; font-weight: 600; flex-shrink: 0;
 }
-.editor-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.tool-btn {
-  width: 26px;
-  height: 26px;
-  border: none;
-  background: transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #666;
-  font-size: 13px;
-  transition: all 0.15s;
-}
-.tool-btn:hover {
-  background: #f0f0f0;
-  color: #333;
-}
-.tool-sep {
-  width: 1px;
-  height: 16px;
-  background: #e0e0e0;
-  margin: 0 2px;
-}
-.editor-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-}
-.action-btn {
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s;
-}
-.fullscreen-btn {
-  width: 28px;
-  height: 28px;
-  background: transparent;
-  color: #999;
-}
-.fullscreen-btn:hover {
-  background: #f0f0f0;
-  color: #333;
-}
-.send-btn {
-  background: #1677ff;
-  color: #fff;
-  font-size: 12px;
-  padding: 5px 14px;
-  font-weight: 500;
-}
-.send-btn:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-.send-btn:not(:disabled):hover {
-  background: #4096ff;
-}
-.editor-content {
-  min-height: 48px;
-  max-height: 120px;
-  overflow-y: auto;
-  padding: 6px 12px 8px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #333;
-  outline: none;
-}
-.editor-content.is-fullscreen {
-  flex: 1;
-  max-height: none;
-  padding: 16px 24px;
-  font-size: 15px;
-}
-.editor-content:empty::before {
-  content: attr(data-placeholder);
-  color: #ccc;
-  pointer-events: none;
-}
-.editor-content:focus {
-  background: #fafafa;
-}
-:deep(ul), :deep(ol) {
-  padding-left: 20px;
-  margin: 4px 0;
-}
+.toolbar-container { flex: 1; min-width: 0; }
+.editor-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.action-btn { border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.fullscreen-btn { width: 28px; height: 28px; background: transparent; color: #999; }
+.fullscreen-btn:hover { background: #f0f0f0; color: #333; }
+.send-btn { background: #1677ff; color: #fff; font-size: 12px; padding: 5px 14px; font-weight: 500; }
+.send-btn:disabled { background: #ccc; cursor: not-allowed; }
+.editor-container { min-height: 60px; max-height: 200px; overflow-y: auto; }
+.editor-container.is-fullscreen { flex: 1; max-height: none; }
+
+:deep(.w-e-toolbar) { border: none !important; border-bottom: 1px solid #f0f0f0 !important; border-radius: 0 !important; }
+:deep(.w-e-text-container) { border: none !important; border-radius: 0 !important; }
+:deep(.w-e-text-container [data-slate-editor]) { min-height: 40px; padding: 8px 12px; font-size: 13px; line-height: 1.6; }
+:deep(.w-e-bar-item button) { width: 28px; height: 28px; }
+:deep(.w-e-bar-item button svg) { width: 14px; height: 14px; }
+:deep(.w-e-bar) { padding: 2px 4px; }
+:deep(.w-e-text-placeholder) { top: 10px; left: 12px; font-size: 13px; color: #ccc; }
+:deep(.w-e-modal) { z-index: 2147483648; }
 </style>

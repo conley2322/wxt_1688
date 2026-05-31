@@ -260,7 +260,8 @@ async function handleDeleteComment(commentId) {
             ref="tagInputRef"
             class="tag-input"
             v-model="tagInputText"
-            placeholder="输入标签名..."
+            placeholder="输入标签名（最多10字）..."
+            maxlength="10"
             @keydown.enter="handleTagSubmit"
           />
           <button class="tag-submit-btn" :disabled="!tagInputText.trim()" @click="handleTagSubmit">添加</button>
