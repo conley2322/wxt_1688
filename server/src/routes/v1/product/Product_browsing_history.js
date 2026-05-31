@@ -2,12 +2,13 @@ import { Router } from 'express'
 const router = Router()
 
 router.post('/', (req, res) => {
-    console.log(req.body)
+    console.log('ajax: 请求参数', req.body.offer_id)
+    console.log('ajax: 请求参数', req.user_id)
     try {
         const id = crypto.randomUUID()
         const result = req.db.run(
             'INSERT INTO view_records (id, offer_id, user_id) VALUES (?, ?, ?)',
-            [id, req.body.offer_id, req.user_id]
+            [id, req.body.offer_id, req.user.id]
         )
         console.log(result)
         if (result.changes === 1) {

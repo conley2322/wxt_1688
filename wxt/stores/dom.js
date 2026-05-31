@@ -8,6 +8,7 @@ export const useDomStore = defineStore('dom', () => {
   });
 
   async function get_dom_all_data() {
+    console.log('get_dom_all_data: 开始 获取页面数据');
     try {
       // 工厂档案：普通工厂
       const archiveOrdinaryFactoryName = document.querySelector('#pc_card_baseinfo > div > div > div:nth-child(2) > div:nth-child(1) > div:nth-child(1)')

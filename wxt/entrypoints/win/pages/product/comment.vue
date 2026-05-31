@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, nextTick } from 'vue'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import { useApiStore } from '@/stores/api/api.js'
 import TagCloud from '@/entrypoints/win/components/TagCloud.vue'
 import TagPool from '@/entrypoints/win/components/TagPool.vue'
@@ -21,12 +22,17 @@ const tagVisibility = ref('public')
 // 当前输入框文本（用于判断是否显示配置）
 const inputText = ref('')
 const commentInputRef = ref(null)
+const tagInputRef = ref(null)
+const tagInputText = ref('')
 
 // ── 是否已评论（一用户一评论） ──
 const myComment = computed(() =>
   store.productComments.find(c => c.user_name === store.currentUser.name)
 )
-const isEditing = computed(() => inputMode.value === 'comment' && !!myComment.value)
+const isEditing = ref(false)
+const showCommentInput = computed(() =>
+  inputMode.value === 'comment' && (!myComment.value || isEditing.value)
+)
 
 // ── 评论排序/筛选 ──
 const sortOrder = ref('newest')
@@ -71,20 +77,24 @@ const inputSendLabel = computed(() => {
 
 // ── 发送处理 ──
 function handleSend(text) {
-  if (inputMode.value === 'comment') {
-    if (isEditing.value) {
-      store.updateProductComment(myComment.value.id, text)
-    } else {
-      store.addProductComment(text)
-    }
+  if (isEditing.value) {
+    store.updateProductComment(myComment.value.id, text)
+    isEditing.value = false
   } else {
-    // 标签模式：创建新标签并分配
-    const tag = store.createTag(text, tagFontColor.value, tagBgColor.value, tagVisibility.value)
-    store.assignTagToProduct(tag.id)
-    tagFontColor.value = '#fff'
-    tagBgColor.value = '#2ecc71'
-    tagVisibility.value = 'public'
+    store.addProductComment(text)
   }
+}
+
+function handleTagSubmit() {
+  const text = tagInputText.value.trim()
+  if (!text) return
+  const tag = store.createTag(text, tagFontColor.value, tagBgColor.value, tagVisibility.value)
+  store.assignTagToProduct(tag.id)
+  tagInputText.value = ''
+  tagFontColor.value = '#fff'
+  tagBgColor.value = '#2ecc71'
+  tagVisibility.value = 'public'
+  ElMessage.success('标签已添加')
 }
 
 // ── 标签操作 ──
@@ -92,8 +102,12 @@ function handleTagToggleLike(tagId) {
   store.toggleProductTagLike(tagId)
 }
 
-function handleTagRemove(tagId) {
-  store.removeTagFromProduct(tagId)
+async function handleTagRemove(tagId) {
+  try {
+    await ElMessageBox.confirm('确定要从商品中移除该标签吗？', '移除标签', { type: 'warning', confirmButtonText: '移除', cancelButtonText: '取消' })
+    store.removeTagFromProduct(tagId)
+    ElMessage.success('标签已移除')
+  } catch {}
 }
 
 function handleTagAssign(tagId) {
@@ -102,25 +116,39 @@ function handleTagAssign(tagId) {
 
 function onSwitchToComment() {
   inputMode.value = 'comment'
-  if (myComment.value) {
-    nextTick(() => {
-      commentInputRef.value?.setText(myComment.value.text)
-    })
-  }
+  isEditing.value = false
+  tagInputText.value = ''
+  nextTick(() => {
+    commentInputRef.value?.setText('')
+  })
+}
+
+function onSwitchToTag() {
+  inputMode.value = 'tag'
+  isEditing.value = false
+  nextTick(() => {
+    commentInputRef.value?.setText('')
+  })
 }
 
 // ── 编辑/删除评论 ──
 function handleEditComment(comment) {
   inputMode.value = 'comment'
+  isEditing.value = true
   nextTick(() => {
     commentInputRef.value?.setText(comment.text)
   })
 }
 
-function handleDeleteComment(commentId) {
-  store.deleteProductComment(commentId)
-  inputMode.value = 'comment'
-  commentInputRef.value?.setText('')
+async function handleDeleteComment(commentId) {
+  try {
+    await ElMessageBox.confirm('确定要删除这条评论吗？', '删除评论', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+    store.deleteProductComment(commentId)
+    inputMode.value = 'comment'
+    isEditing.value = false
+    commentInputRef.value?.setText('')
+    ElMessage.success('评论已删除')
+  } catch {}
 }
 </script>
 
@@ -173,18 +201,9 @@ function handleDeleteComment(commentId) {
 
     <!-- 输入区 -->
     <div class="input-area">
-      <!-- 标签创建配置（仅标签模式且有输入内容时显示） -->
-      <InputSettings
-        v-if="inputMode === 'tag' && inputText.trim()"
-        :fontColor="tagFontColor"
-        :bgColor="tagBgColor"
-        :visibility="tagVisibility"
-        @update:fontColor="tagFontColor = $event"
-        @update:bgColor="tagBgColor = $event"
-        @update:visibility="tagVisibility = $event"
-      />
-
+      <!-- 评论模式：富文本编辑器 -->
       <CommentInput
+        v-if="showCommentInput"
         ref="commentInputRef"
         :userInitial="store.currentUser.initial"
         :userColor="store.currentUser.color"
@@ -193,6 +212,32 @@ function handleDeleteComment(commentId) {
         @send="handleSend"
         @update:text="inputText = $event"
       />
+
+      <!-- 标签模式：简单输入框 -->
+      <div v-else-if="inputMode === 'tag'" class="tag-input-row">
+        <div class="tag-editor-header">
+          <div class="editor-avatar" :style="{ background: store.currentUser.color }">{{ store.currentUser.initial }}</div>
+          <InputSettings
+            v-if="tagInputText.trim()"
+            :fontColor="tagFontColor"
+            :bgColor="tagBgColor"
+            :visibility="tagVisibility"
+            @update:fontColor="tagFontColor = $event"
+            @update:bgColor="tagBgColor = $event"
+            @update:visibility="tagVisibility = $event"
+          />
+        </div>
+        <div class="tag-input-wrap">
+          <input
+            ref="tagInputRef"
+            class="tag-input"
+            v-model="tagInputText"
+            placeholder="输入标签名..."
+            @keydown.enter="handleTagSubmit"
+          />
+          <button class="tag-submit-btn" :disabled="!tagInputText.trim()" @click="handleTagSubmit">添加</button>
+        </div>
+      </div>
       <div class="mode-switch">
         <span
           class="mode-btn"
@@ -207,7 +252,7 @@ function handleDeleteComment(commentId) {
         <span
           class="mode-btn"
           :class="{ active: inputMode === 'tag' }"
-          @click="inputMode = 'tag'"
+          @click="onSwitchToTag"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
@@ -283,5 +328,61 @@ function handleDeleteComment(commentId) {
 }
 .mode-btn:hover {
   background: #f5f5f5;
+}
+.tag-input-row {
+  border-top: 1px solid #f0f0f0;
+  background: #fff;
+}
+.tag-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 0;
+}
+.tag-input-row .editor-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.tag-input-wrap {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px 8px;
+}
+.tag-input {
+  flex: 1;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+.tag-input:focus {
+  border-color: #1677ff;
+  background: #fafafa;
+}
+.tag-submit-btn {
+  border: none;
+  background: #1677ff;
+  color: #fff;
+  font-size: 12px;
+  padding: 5px 14px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tag-submit-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+.tag-submit-btn:not(:disabled):hover {
+  background: #4096ff;
 }
 </style>

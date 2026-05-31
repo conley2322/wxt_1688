@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import store from '../../utils/storage.js'
+import store from '../utils/storage.js'
 
 export const useAuthStore = defineStore('auth', () => {
   const serverAddress = ref('')

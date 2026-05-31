@@ -6,8 +6,8 @@ router.post('/', (req, res) => {
     try {
         const id = crypto.randomUUID()
         const result = req.db.run(
-            'INSERT INTO tags (id, text, color, bgcolor, visible, created_user_id) VALUES (?, ?, ?, ?, ?, ?)',
-            [id, req.body.text, req.body.color, req.body.bgcolor, req.body.visible, req.body.created_user_id]
+            'INSERT INTO tags (id, text, font_color, bg_color, visibility, creator, added_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [id, req.body.text, req.body.font_color, req.body.bg_color, req.body.visibility, req.body.creator, req.body.added_by]
         )
         res.json({ message: '标签添加成功', id: id })
         if (result.changes === 0) {

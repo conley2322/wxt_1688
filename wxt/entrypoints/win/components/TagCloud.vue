@@ -8,8 +8,9 @@
         class="cloud-tag"
         :class="{ 'my-tag': tag.creator === currentUser, liked: isLiked(tag) }"
         :style="{ background: tag.bg_color, color: tag.font_color }"
-        :title="`标签：${tag.text}\n创建者：${tag.creator}\n创建时间：${formatDate(tag.created_at)}\n认同人数：${tag.like_count}人${isLiked(tag) ? '\n已点赞' : ''}`"
+        :title="`标签：${tag.text}\n创建者：${tag.creator}\n创建时间：${formatDate(tag.created_at)}\n认同人数：${tag.like_count}人${isLiked(tag) ? '\n已点赞' : ''}${tag.creator === currentUser ? '\n右键删除' : ''}`"
         @click="handleClick(tag)"
+        @contextmenu.prevent="handleContextMenu(tag)"
       >
         {{ tag.text }}
 
@@ -67,10 +68,14 @@ function isLiked(tag) {
 }
 
 function handleClick(tag) {
+  if (tag.creator !== props.currentUser) {
+    emit('toggle-like', tag.id)
+  }
+}
+
+function handleContextMenu(tag) {
   if (tag.creator === props.currentUser) {
     emit('remove', tag.id)
-  } else {
-    emit('toggle-like', tag.id)
   }
 }
 
@@ -104,7 +109,7 @@ function formatDate(iso) {
   align-items: center;
   gap: 3px;
   padding: 3px 10px;
-  border-radius: 3px;
+  border-radius: 12px;
   font-size: 11px;
   cursor: pointer;
   position: relative;
@@ -113,11 +118,16 @@ function formatDate(iso) {
   border: 2px solid transparent;
 }
 .cloud-tag:hover {
-  opacity: 0.8;
+  opacity: 0.85;
+  transform: translateY(-1px);
 }
 .cloud-tag.my-tag {
-  border-color: rgba(255, 255, 255, 0.6);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  font-weight: 500;
+}
+.cloud-tag:not(.my-tag) {
+  opacity: 0.85;
 }
 .cloud-tag.liked {
   box-shadow: 0 0 0 2px #1677ff;

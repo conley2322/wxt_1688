@@ -1,5 +1,5 @@
 <template>
-  <div class="tag-chip" :style="{ background: color }" @mouseenter="showActions = true" @mouseleave="showActions = false"
+  <div class="tag-chip" :class="{ 'is-mine': isMine }" :style="{ background: color }" @mouseenter="showActions = true" @mouseleave="showActions = false"
     @click.stop>
     <span class="tag-text">{{ text }}</span>
 
@@ -20,6 +20,7 @@ const props = defineProps({
   text: { type: String, required: true },
   color: { type: String, default: '#2ecc71' },
   visible: { type: Boolean, default: true },
+  isMine: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['toggle-visible', 'remove'])
@@ -31,13 +32,19 @@ const showActions = ref(false)
 .tag-chip {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 3px;
+  padding: 2px 10px;
+  border-radius: 12px;
   font-size: 11px;
   color: #fff;
   cursor: pointer;
   position: relative;
   line-height: 20px;
+  border: 2px solid transparent;
+}
+.tag-chip.is-mine {
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  font-weight: 500;
 }
 .tag-text {
   max-width: 80px;

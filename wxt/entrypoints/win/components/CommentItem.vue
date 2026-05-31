@@ -6,7 +6,7 @@
         <span class="cmt-name">{{ comment.user_name }}</span>
         <span class="cmt-time">{{ timeAgo }}</span>
       </div>
-      <div class="cmt-text">{{ comment.text }}</div>
+      <div class="cmt-text" v-html="comment.text"></div>
       <div class="cmt-actions">
         <span class="cmt-like" :class="{ liked }" @click.stop="$emit('toggle-like', comment.id)">
           <svg width="12" height="12" viewBox="0 0 24 24" :fill="liked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2">
