@@ -9,5 +9,6 @@ import { authenticate } from '../../middlewares/auth/index.js'
 router.use('/users', (await import('./users/index.js')).default)       // /api/v1/users/**
 router.use('/products', authenticate, (await import('./product/index.js')).default)   // /api/v1/products/**
 router.use('/tags', authenticate, (await import('./tags/index.js')).default)          // /api/v1/tags/**
-router.use('/win', authenticate, (await import('./win/index.js')).default)          // /api/v1/win/**
+router.use('/win', authenticate, (await import('./win/index.js')).default)            // /api/v1/win/**
+router.use('/suppliers', authenticate, (await import('./suppliers/index.js')).default) // /api/v1/suppliers/**
 export default router

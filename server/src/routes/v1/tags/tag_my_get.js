@@ -6,8 +6,8 @@ router.post('/', (req, res) => {
     try {
         const result = req.db.query
         (
-            'SELECT * FROM tags WHERE added_by = ?',
-            [req.query.user_id]
+            'SELECT * FROM tags WHERE creator_id = ?',
+            [req.user.id]
         )
         res.json({ message: '标签获取成功', tags: result })
         if (result.length === 0) {

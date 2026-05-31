@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useApiStore } from '@/stores/api/api.js'
 import TagCloud from '@/entrypoints/win/components/TagCloud.vue'
+
 import TagPool from '@/entrypoints/win/components/TagPool.vue'
 import InputSettings from '@/entrypoints/win/components/InputSettings.vue'
 import CommentItem from '@/entrypoints/win/components/CommentItem.vue'
@@ -25,9 +26,19 @@ const commentInputRef = ref(null)
 const tagInputRef = ref(null)
 const tagInputText = ref('')
 
+// ── 监听 currentOfferId，设置后自动加载数据 ──
+watch(() => store.currentOfferId, async (id) => {
+  if (!id) return
+  await Promise.all([
+    store.fetchProductComments(id),
+    store.fetchProductTags(id),
+    store.fetchTagPool()
+  ])
+}, { immediate: true })
+
 // ── 是否已评论（一用户一评论） ──
 const myComment = computed(() =>
-  store.productComments.find(c => c.user_name === store.currentUser.name)
+  store.productComments.find(c => c.username === store.currentUser.name)
 )
 const isEditing = ref(false)
 const showCommentInput = computed(() =>
@@ -47,7 +58,7 @@ const sortLabel = computed(() => sortOrder.value === 'newest' ? '最新' : '最�
 const filteredComments = computed(() => {
   let list = [...store.productComments]
   if (filterUsers.value.length > 0) {
-    list = list.filter(c => filterUsers.value.includes(c.user_name))
+    list = list.filter(c => filterUsers.value.includes(c.username))
   }
   if (sortOrder.value === 'newest') {
     list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
@@ -60,7 +71,7 @@ const filteredComments = computed(() => {
 const userList = computed(() => {
   const map = {}
   store.productComments.forEach(c => {
-    map[c.user_name] = (map[c.user_name] || 0) + 1
+    map[c.username] = (map[c.username] || 0) + 1
   })
   return Object.entries(map).map(([name, count]) => ({ name, count }))
 })
@@ -76,42 +87,61 @@ const inputSendLabel = computed(() => {
 })
 
 // ── 发送处理 ──
-function handleSend(text) {
-  if (isEditing.value) {
-    store.updateProductComment(myComment.value.id, text)
-    isEditing.value = false
-  } else {
-    store.addProductComment(text)
+async function handleSend(text) {
+  try {
+    if (isEditing.value) {
+      await store.updateProductComment(myComment.value.id, text)
+      await store.fetchProductComments(store.currentOfferId)
+      isEditing.value = false
+    } else {
+      await store.addProductComment(store.currentOfferId, text)
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
   }
 }
 
-function handleTagSubmit() {
+async function handleTagSubmit() {
   const text = tagInputText.value.trim()
   if (!text) return
-  const tag = store.createTag(text, tagFontColor.value, tagBgColor.value, tagVisibility.value)
-  store.assignTagToProduct(tag.id)
-  tagInputText.value = ''
-  tagFontColor.value = '#fff'
-  tagBgColor.value = '#2ecc71'
-  tagVisibility.value = 'public'
-  ElMessage.success('标签已添加')
+  try {
+    const tag = await store.createTag(text, tagFontColor.value, tagBgColor.value, tagVisibility.value)
+    await store.assignProductTag(store.currentOfferId, tag.id)
+    tagInputText.value = ''
+    tagFontColor.value = '#fff'
+    tagBgColor.value = '#2ecc71'
+    tagVisibility.value = 'public'
+    ElMessage.success('标签已添加')
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
+  }
 }
 
 // ── 标签操作 ──
-function handleTagToggleLike(tagId) {
-  store.toggleProductTagLike(tagId)
-}
-
 async function handleTagRemove(tagId) {
   try {
     await ElMessageBox.confirm('确定要从商品中移除该标签吗？', '移除标签', { type: 'warning', confirmButtonText: '移除', cancelButtonText: '取消' })
-    store.removeTagFromProduct(tagId)
+    await store.removeProductTag(store.currentOfferId, tagId)
     ElMessage.success('标签已移除')
   } catch {}
 }
 
-function handleTagAssign(tagId) {
-  store.assignTagToProduct(tagId)
+async function handleTagAssign(tagId) {
+  try {
+    await store.assignProductTag(store.currentOfferId, tagId)
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
+  }
+}
+
+async function handlePoolTagDelete(tagId) {
+  try {
+    await ElMessageBox.confirm('确定要删除这个标签吗？将从标签池中永久移除。', '删除标签', {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消'
+    })
+    await store.deleteTag(tagId)
+    ElMessage.success('标签已删除')
+  } catch {}
 }
 
 function onSwitchToComment() {
@@ -143,7 +173,8 @@ function handleEditComment(comment) {
 async function handleDeleteComment(commentId) {
   try {
     await ElMessageBox.confirm('确定要删除这条评论吗？', '删除评论', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
-    store.deleteProductComment(commentId)
+    await store.deleteProductComment(commentId)
+    await store.fetchProductComments(store.currentOfferId)
     inputMode.value = 'comment'
     isEditing.value = false
     commentInputRef.value?.setText('')
@@ -158,7 +189,6 @@ async function handleDeleteComment(commentId) {
     <TagCloud
       :tags="store.productAssignedTags"
       :currentUser="store.currentUser.name"
-      @toggle-like="handleTagToggleLike"
       @remove="handleTagRemove"
     />
 
@@ -183,20 +213,18 @@ async function handleDeleteComment(commentId) {
         :key="c.id"
         :comment="c"
         :currentUser="store.currentUser.name"
-        @toggle-like="(id) => store.toggleLike(id)"
         @edit="handleEditComment"
         @delete="handleDeleteComment"
       />
       <div v-if="filteredComments.length === 0" class="empty">暂无评论</div>
     </div>
 
-    <!-- 标签模式：标签池 -->
+    <!-- 标签池 -->
     <TagPool
       v-if="inputMode === 'tag'"
       :availableTags="store.productAvailableTags"
-      :assignedTags="store.productAssignedTags"
       @assign="handleTagAssign"
-      @remove="handleTagRemove"
+      @delete-tag="handlePoolTagDelete"
     />
 
     <!-- 输入区 -->

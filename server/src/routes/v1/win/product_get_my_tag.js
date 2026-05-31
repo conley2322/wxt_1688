@@ -10,10 +10,14 @@ router.get('/', (req, res) => {
                 [req.user.id, req.query.offer_id]
             )
 
-        //其他人标签
+        //其他人标签（只显示 public 标签）
         const otherTags = req.db.query
             (
-                'SELECT tags.text, tags.font_color, tags.bg_color, tags.visibility, product_tags.assigned_at FROM product_tags LEFT JOIN tags ON product_tags.tag_id = tags.id WHERE offer_id = ? and visibility = 1',
+                `SELECT t.text, t.font_color, t.bg_color, t.visibility, pt.assigned_at, u.username AS creator
+                 FROM product_tags pt
+                 LEFT JOIN tags t ON pt.tag_id = t.id
+                 LEFT JOIN users u ON pt.tag_user = u.id
+                 WHERE pt.offer_id = ? AND t.visibility = 'public'`,
                 [req.query.offer_id]
             )
         console.log(otherTags)

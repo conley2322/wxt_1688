@@ -52,9 +52,9 @@ db.exec(`
 //   text            标签文字
 //   font_color      文字颜色
 //   bg_color        背景颜色
-//   visibility      可见性(public/hidden)
-//   creator         创建者
-//   added_by        添加者
+//   visibility      可见性 public=所有人可见 private=仅创建者可见
+//   creator         创建者用户名
+//   creator_id      创建者用户ID
 //   created_at      创建时间
 // ============================================================
 db.exec(`
@@ -65,18 +65,19 @@ db.exec(`
     bg_color TEXT,
     visibility TEXT DEFAULT 'public',
     creator TEXT,
-    added_by TEXT,
+    creator_id INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `)
 
 // ============================================================
 // 4. products — 1688 商品
-//   id        自增主键
-//   offer_id  1688商品ID
-//   title     商品标题
+//   id          自增主键
+//   offer_id    1688商品ID
+//   title       商品标题
 //   main_img_url  产品主图URL
-//   created_at 创建时间
+//   supplier_name  供应商名称
+//   created_at  创建时间
 // ============================================================
 db.exec(`
   CREATE TABLE IF NOT EXISTS products (
@@ -84,6 +85,7 @@ db.exec(`
     offer_id TEXT,
     title TEXT,
     main_img_url TEXT,
+    supplier_name TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `)
@@ -164,7 +166,8 @@ db.exec(`
     user_id TEXT NOT NULL,
     text TEXT NOT NULL,
     img INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME
   )
 `)
 
@@ -182,7 +185,8 @@ db.exec(`
     supplier_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     text TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME
   )
 `)
 
@@ -191,7 +195,6 @@ db.exec(`
 //   id         UUID主键
 //   offer_id   1688商品ID
 //   tag_id     标签ID
-//   visible    是否可见 1=显示 0=隐藏
 //   tag_user   打标签的用户ID
 //   assigned_at 分配时间
 // ============================================================
@@ -200,7 +203,6 @@ db.exec(`
     id TEXT PRIMARY KEY,
     offer_id TEXT NOT NULL,
     tag_id TEXT NOT NULL,
-    visible INTEGER DEFAULT 1,
     tag_user TEXT,
     assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
@@ -211,7 +213,6 @@ db.exec(`
 //   id          UUID主键
 //   supplier_id 供应商ID
 //   tag_id      标签ID
-//   visible     是否可见 1=显示 0=隐藏
 //   tag_user    打标签的用户ID
 //   assigned_at 分配时间
 // ============================================================
@@ -220,7 +221,6 @@ db.exec(`
     id TEXT PRIMARY KEY,
     supplier_id TEXT NOT NULL,
     tag_id TEXT NOT NULL,
-    visible INTEGER DEFAULT 1,
     tag_user TEXT,
     assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
@@ -349,6 +349,9 @@ if (adminUser) {
   const extraUsers = [
     { username: 'zhangsan', email: 'zhangsan@local.com', password: bcrypt.hashSync('123456', 10) },
     { username: 'lisi', email: 'lisi@local.com', password: bcrypt.hashSync('123456', 10) },
+    { username: '2', email: 'lis2i@local.com', password: bcrypt.hashSync('2', 10) },
+    { username: '3', email: 'lis23i@local.com', password: bcrypt.hashSync('3', 10) },
+    { username: '4', email: 'lis24i@local.com', password: bcrypt.hashSync('4', 10) },
   ]
   const insertUser = db.prepare('INSERT INTO users (username, email, password) VALUES (?, ?, ?)')
   const userIds = [db.prepare('SELECT id FROM users WHERE username = ?').get('1').id]
@@ -389,11 +392,11 @@ if (adminUser) {
     { text: '样品待确认', font_color: '#fff', bg_color: '#722ed1' },
     { text: '质量有问题', font_color: '#fff', bg_color: '#f5222d' },
   ]
-  const insertTag = db.prepare('INSERT INTO tags (id, text, font_color, bg_color, visibility, creator, added_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+  const insertTag = db.prepare('INSERT INTO tags (id, text, font_color, bg_color, visibility, creator, creator_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
   const tagIds = []
   for (const t of tags) {
     const id = generateId()
-    insertTag.run(id, t.text, t.font_color, t.bg_color, 'public', 'Conley', 'Conley', '2026-05-30T13:22:29Z')
+    insertTag.run(id, t.text, t.font_color, t.bg_color, 'public', '1', userIds[0], '2026-05-30T13:22:29Z')
     tagIds.push(id)
   }
 
@@ -546,27 +549,6 @@ if (adminUser) {
   }
 
   console.log('Seed data inserted for all 16 tables')
-}
-
-// ============================================================
-// 数据迁移：将 view_records.user_id 从 TEXT 改为 INTEGER
-// ============================================================
-const viewRecordsColumnInfo = db.prepare("PRAGMA table_info(view_records)").all()
-const userIdColumnType = viewRecordsColumnInfo.find(col => col.name === 'user_id')?.type
-if (userIdColumnType === 'TEXT') {
-  console.log('Migrating view_records.user_id from TEXT to INTEGER...')
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS view_records_new (
-      id TEXT PRIMARY KEY,
-      offer_id TEXT NOT NULL,
-      user_id INTEGER NOT NULL,
-      viewed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `)
-  db.exec(`INSERT INTO view_records_new SELECT id, offer_id, CAST(user_id AS INTEGER), viewed_at FROM view_records`)
-  db.exec(`DROP TABLE view_records`)
-  db.exec(`ALTER TABLE view_records_new RENAME TO view_records`)
-  console.log('Migration complete: view_records.user_id is now INTEGER')
 }
 
 /**

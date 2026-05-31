@@ -24,6 +24,12 @@
       "sourceType": "github",
       "skillPath": "skills/opencli-usage/SKILL.md",
       "computedHash": "9ac8c8a5841ee541affe2dffb0fb42788a760638d2d9bd9e87cb74f4e15de5d0"
+    },
+    "steve-jobs-perspective": {
+      "source": "alchaincyf/steve-jobs-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "fa0cfd181e7218d184e1251841ef21215e95f8c640c45d22caf8cec03dbd6fe6"
     }
   }
 }

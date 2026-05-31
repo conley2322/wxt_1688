@@ -1,20 +1,13 @@
 <template>
   <div class="comment-item">
-    <div class="cmt-avatar" :style="{ background: comment.color }">{{ comment.initial }}</div>
+    <div class="cmt-avatar" :style="{ background: avatarColor }">{{ avatarInitial }}</div>
     <div class="cmt-body">
       <div class="cmt-header">
-        <span class="cmt-name">{{ comment.user_name }}</span>
+        <span class="cmt-name">{{ comment.username }}</span>
         <span class="cmt-time">{{ timeAgo }}</span>
       </div>
       <div class="cmt-text" v-html="comment.text"></div>
       <div class="cmt-actions">
-        <span class="cmt-like" :class="{ liked }" @click.stop="$emit('toggle-like', comment.id)">
-          <svg width="12" height="12" viewBox="0 0 24 24" :fill="liked ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2">
-            <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/>
-            <path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>
-          </svg>
-          {{ comment.likes > 0 ? comment.likes : '' }}
-        </span>
         <template v-if="isMine">
           <span class="cmt-action-btn" @click.stop="$emit('edit', comment)">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -42,17 +35,34 @@ const props = defineProps({
   currentUser: { type: String, default: '' },
 })
 
-defineEmits(['toggle-like', 'edit', 'delete'])
+defineEmits(['edit', 'delete'])
 
-const liked = computed(() =>
-  props.comment.liked_by && props.comment.liked_by.includes(props.currentUser)
-)
+const isMine = computed(() => props.comment.username === props.currentUser)
 
-const isMine = computed(() => props.comment.user_name === props.currentUser)
+// 用用户名生成稳定的头像颜色
+const colorPool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
+const avatarColor = computed(() => {
+  let hash = 0
+  const name = props.comment.username || ''
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  return colorPool[Math.abs(hash) % colorPool.length]
+})
+const avatarInitial = computed(() => (props.comment.username || '?').charAt(0).toUpperCase())
 
-const timeAgo = computed(() => {
+function parseDate(dateStr) {
+  if (!dateStr) return null
+  // SQLite 格式 "2026-05-31 03:34:01" → ISO
+  if (dateStr.includes(' ') && !dateStr.includes('T')) {
+    return new Date(dateStr.replace(' ', 'T') + '.000Z')
+  }
+  return new Date(dateStr)
+}
+
+function formatTime(dateStr) {
+  if (!dateStr) return ''
   const now = new Date()
-  const t = new Date(props.comment.created_at)
+  const t = parseDate(dateStr)
+  if (!t || isNaN(t)) return ''
   const diff = Math.floor((now - t) / 1000)
   if (diff < 60) return '刚刚'
   if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
@@ -62,6 +72,13 @@ const timeAgo = computed(() => {
   const m = String(t.getMonth() + 1).padStart(2, '0')
   const d = String(t.getDate()).padStart(2, '0')
   return `${m}/${d}`
+}
+
+const timeAgo = computed(() => {
+  if (props.comment.updated_at) {
+    return formatTime(props.comment.updated_at) + ' (已编辑)'
+  }
+  return formatTime(props.comment.created_at)
 })
 </script>
 
@@ -111,6 +128,26 @@ const timeAgo = computed(() => {
   line-height: 1.5;
   word-break: break-word;
   margin-bottom: 4px;
+  overflow-wrap: break-word;
+}
+.cmt-text :deep(ul),
+.cmt-text :deep(ol) {
+  padding-left: 18px;
+  margin: 4px 0;
+}
+.cmt-text :deep(li) {
+  margin-bottom: 2px;
+}
+.cmt-text :deep(p) {
+  margin: 0 0 4px;
+}
+.cmt-text :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.cmt-text :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
 }
 .cmt-actions {
   display: flex;

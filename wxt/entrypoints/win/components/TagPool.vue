@@ -1,27 +1,16 @@
 <template>
   <div class="tag-pool">
     <div v-if="availableTags.length" class="pool-section">
-      <span class="pool-label">可添加：</span>
+      <span class="pool-label">可添加标签：</span>
       <span
         v-for="tag in availableTags"
         :key="tag.id"
         class="pool-tag"
         :style="{ background: tag.bg_color, color: tag.font_color }"
         @click="$emit('assign', tag.id)"
+        @contextmenu.prevent="$emit('deleteTag', tag.id)"
       >
         {{ tag.text }}
-      </span>
-    </div>
-    <div v-if="assignedTags.length" class="pool-section">
-      <span class="pool-label">已添加（点击取消）：</span>
-      <span
-        v-for="tag in assignedTags"
-        :key="tag.id"
-        class="pool-tag assigned"
-        :style="{ background: tag.bg_color, color: tag.font_color }"
-        @click="$emit('remove', tag.id)"
-      >
-        {{ tag.text }} &times;{{ tag.like_count }}
       </span>
     </div>
   </div>
@@ -30,9 +19,8 @@
 <script setup>
 defineProps({
   availableTags: { type: Array, required: true },
-  assignedTags: { type: Array, required: true },
 })
-defineEmits(['assign', 'remove'])
+defineEmits(['assign', 'deleteTag'])
 </script>
 
 <style scoped>
@@ -45,10 +33,6 @@ defineEmits(['assign', 'remove'])
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  margin-bottom: 4px;
-}
-.pool-section:last-child {
-  margin-bottom: 0;
 }
 .pool-label {
   font-size: 11px;
@@ -67,8 +51,5 @@ defineEmits(['assign', 'remove'])
 }
 .pool-tag:hover {
   opacity: 0.8;
-}
-.pool-tag.assigned {
-  opacity: 0.7;
 }
 </style>

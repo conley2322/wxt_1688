@@ -44,7 +44,7 @@ router.get('/', (req, res) => {
         // console.log(viewCountByUser)
 
         const mytags = req.db.query( //获取我这个商品我的标签
-            `SELECT  t.created_at, t.text, t.font_color, t.bg_color, pt.visible
+            `SELECT  t.created_at, t.text, t.font_color, t.bg_color, t.visibility
              FROM tags t
              JOIN product_tags pt ON t.id = pt.tag_id
              WHERE pt.offer_id = ? AND pt.tag_user = ?`,

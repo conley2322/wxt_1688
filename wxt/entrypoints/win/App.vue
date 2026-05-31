@@ -25,21 +25,45 @@ const currentTab = computed(() => {
 // ── 挂载时从页面抓取真实数据 ──
 onMounted(async () => {
   console.log('App mounted win页面')
-  stopLoading()// 停止页面加载，刷新按钮应停止转圈
+  stopLoading()
+
+  // 初始化用户
+  await store.initUser()
+
+  // 抓取页面 DOM 数据
   const data = await domStore.get_dom_all_data()
   console.log(data)
   productDom.value = data
-  const res = await store.ajax('/api/v1/products/Product_browsing_history', 'POST', {
-    offer_id: data.productId,
-  })
-  console.log('ajax: 返回数据', res)
-  // 处理返回的浏览历史数据
-  if (res && Array.isArray(res.data)) {
-    viewerStats.value = res.data.map(item => ({
-      initial: (item.name || item.user_name || 'U').charAt(0).toUpperCase(),
-      name: item.name || item.user_name || '用户',
-      count: item.count || item.view_count || 1
-    }))
+
+  if (!data.productId) return
+
+  // 设置当前商品
+  store.currentOfferId = data.productId
+  store.currentSupplierName = data.CompanyName || ''
+
+  try {
+    // 上传浏览记录（后端自动处理商品入库 + 字段补充）
+    const res = await store.recordBrowsing(
+      data.productId,
+      data.title,
+      data.imageUrl,
+      data.CompanyName
+    )
+
+    if (res.data) {
+      viewerStats.value = res.data.viewers.map(v => ({
+        initial: v.initial,
+        name: v.username,
+        count: v.count
+      }))
+    }
+
+    // 自动创建供应商（后台静默）
+    if (data.CompanyName) {
+      store.createSupplier(data.CompanyName, data.memberId).catch(() => {})
+    }
+  } catch (e) {
+    console.error('Win 初始化失败:', e)
   }
 })
 
@@ -83,7 +107,7 @@ const viewerAvatars = computed(() =>
     <!-- 主 Tab 栏 -->
     <div class="main-tabs">
       <span
-        v-for="tab in [{ key: 'product', label: '商品' }, { key: 'supplier', label: '供应商' }, { key: 'analysis', label: '分析' }]"
+        v-for="tab in [{ key: 'product', label: '商品' }, { key: 'supplier', label: '供应商' }]"
         :key="tab.key" class="main-tab" :class="{ active: currentTab === tab.key }" @click="goToTab(tab.key)">
         {{ tab.label }}
       </span>

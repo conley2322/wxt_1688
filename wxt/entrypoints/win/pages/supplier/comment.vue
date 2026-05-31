@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useApiStore } from '@/stores/api/api.js'
 import TagCloud from '@/entrypoints/win/components/TagCloud.vue'
+
 import TagPool from '@/entrypoints/win/components/TagPool.vue'
 import InputSettings from '@/entrypoints/win/components/InputSettings.vue'
 import CommentItem from '@/entrypoints/win/components/CommentItem.vue'
@@ -22,9 +23,20 @@ const commentInputRef = ref(null)
 const tagInputRef = ref(null)
 const tagInputText = ref('')
 
+// ── 监听 currentSupplierName，设置后自动加载数据 ──
+watch(() => store.currentSupplierName, async (name) => {
+  if (!name) return
+  await Promise.all([
+    store.fetchSupplierComments(name),
+    store.fetchSupplierTags(name),
+    store.fetchTagPool(),
+    store.fetchCooperateStatus(name)
+  ])
+}, { immediate: true })
+
 // ── 是否已评论（一用户一评论） ──
 const myComment = computed(() =>
-  store.supplierComments.find(c => c.user_name === store.currentUser.name)
+  store.supplierComments.find(c => c.username === store.currentUser.name)
 )
 const isEditing = ref(false)
 const showCommentInput = computed(() =>
@@ -44,7 +56,7 @@ const sortLabel = computed(() => sortOrder.value === 'newest' ? '最新' : '最�
 const filteredComments = computed(() => {
   let list = [...store.supplierComments]
   if (filterUsers.value.length > 0) {
-    list = list.filter(c => filterUsers.value.includes(c.user_name))
+    list = list.filter(c => filterUsers.value.includes(c.username))
   }
   if (sortOrder.value === 'newest') {
     list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
@@ -57,7 +69,7 @@ const filteredComments = computed(() => {
 const userList = computed(() => {
   const map = {}
   store.supplierComments.forEach(c => {
-    map[c.user_name] = (map[c.user_name] || 0) + 1
+    map[c.username] = (map[c.username] || 0) + 1
   })
   return Object.entries(map).map(([name, count]) => ({ name, count }))
 })
@@ -73,42 +85,61 @@ const inputSendLabel = computed(() => {
 })
 
 // ── 发送处理 ──
-function handleSend(text) {
-  if (isEditing.value) {
-    store.updateSupplierComment(myComment.value.id, text)
-    isEditing.value = false
-  } else {
-    store.addSupplierComment(text)
+async function handleSend(text) {
+  try {
+    if (isEditing.value) {
+      await store.updateSupplierComment(myComment.value.id, text)
+      await store.fetchSupplierComments(store.currentSupplierName)
+      isEditing.value = false
+    } else {
+      await store.addSupplierComment(store.currentSupplierName, text)
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
   }
 }
 
-function handleTagSubmit() {
+async function handleTagSubmit() {
   const text = tagInputText.value.trim()
   if (!text) return
-  const tag = store.createTag(text, tagFontColor.value, tagBgColor.value, tagVisibility.value)
-  store.assignTagToSupplier(tag.id)
-  tagInputText.value = ''
-  tagFontColor.value = '#fff'
-  tagBgColor.value = '#2ecc71'
-  tagVisibility.value = 'public'
-  ElMessage.success('标签已添加')
+  try {
+    const tag = await store.createTag(text, tagFontColor.value, tagBgColor.value, tagVisibility.value)
+    await store.assignSupplierTag(store.currentSupplierName, tag.id)
+    tagInputText.value = ''
+    tagFontColor.value = '#fff'
+    tagBgColor.value = '#2ecc71'
+    tagVisibility.value = 'public'
+    ElMessage.success('标签已添加')
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
+  }
 }
 
 // ── 标签操作 ──
-function handleTagToggleLike(tagId) {
-  store.toggleSupplierTagLike(tagId)
-}
-
 async function handleTagRemove(tagId) {
   try {
     await ElMessageBox.confirm('确定要从供应商中移除该标签吗？', '移除标签', { type: 'warning', confirmButtonText: '移除', cancelButtonText: '取消' })
-    store.removeTagFromSupplier(tagId)
+    await store.removeSupplierTag(store.currentSupplierName, tagId)
     ElMessage.success('标签已移除')
   } catch {}
 }
 
-function handleTagAssign(tagId) {
-  store.assignTagToSupplier(tagId)
+async function handleTagAssign(tagId) {
+  try {
+    await store.assignSupplierTag(store.currentSupplierName, tagId)
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
+  }
+}
+
+async function handlePoolTagDelete(tagId) {
+  try {
+    await ElMessageBox.confirm('确定要删除这个标签吗？将从标签池中永久移除。', '删除标签', {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消'
+    })
+    await store.deleteTag(tagId)
+    ElMessage.success('标签已删除')
+  } catch {}
 }
 
 function onSwitchToComment() {
@@ -140,7 +171,8 @@ function handleEditComment(comment) {
 async function handleDeleteComment(commentId) {
   try {
     await ElMessageBox.confirm('确定要删除这条评论吗？', '删除评论', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
-    store.deleteSupplierComment(commentId)
+    await store.deleteSupplierComment(commentId)
+    await store.fetchSupplierComments(store.currentSupplierName)
     inputMode.value = 'comment'
     isEditing.value = false
     commentInputRef.value?.setText('')
@@ -157,11 +189,10 @@ async function handleDeleteComment(commentId) {
         class="flex-1"
         :tags="store.supplierAssignedTags"
         :currentUser="store.currentUser.name"
-        @toggle-like="handleTagToggleLike"
         @remove="handleTagRemove"
       />
       <label class="coop-check">
-        <input type="checkbox" :checked="store.supplierCooperated" @change="store.toggleCooperation()" />
+        <input type="checkbox" :checked="store.supplierCooperated" @change="store.toggleCooperate(store.currentSupplierName)" />
         <span class="coop-label" :class="{ coop: store.supplierCooperated }">
           <svg v-if="store.supplierCooperated" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="20 6 9 17 4 12"/>
@@ -192,20 +223,18 @@ async function handleDeleteComment(commentId) {
         :key="c.id"
         :comment="c"
         :currentUser="store.currentUser.name"
-        @toggle-like="(id) => store.toggleSupplierLike(id)"
         @edit="handleEditComment"
         @delete="handleDeleteComment"
       />
       <div v-if="filteredComments.length === 0" class="empty">暂无评论</div>
     </div>
 
-    <!-- 标签模式 -->
+    <!-- 标签池 -->
     <TagPool
       v-if="inputMode === 'tag'"
       :availableTags="store.supplierAvailableTags"
-      :assignedTags="store.supplierAssignedTags"
       @assign="handleTagAssign"
-      @remove="handleTagRemove"
+      @delete-tag="handlePoolTagDelete"
     />
 
     <!-- 输入区 -->

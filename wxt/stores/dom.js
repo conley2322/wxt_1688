@@ -7,6 +7,29 @@ export const useDomStore = defineStore('dom', () => {
     isLoginPage: true,
   });
 
+  // 从页面提取 1688 会员 ID
+  function extractMemberId() {
+    try {
+      // 从 offer 详情页的 data 属性提取
+      const el = document.querySelector('[data-offer-id]')
+      if (el) {
+        const memberId = el.getAttribute('data-member-id') || el.getAttribute('data-memberid')
+        if (memberId) return memberId
+      }
+      // 从 URL 参数提取
+      const urlParams = new URLSearchParams(window.location.search)
+      const fromUrl = urlParams.get('memberId') || urlParams.get('member_id')
+      if (fromUrl) return fromUrl
+      // 从页面 script 中提取
+      const scripts = document.querySelectorAll('script')
+      for (const s of scripts) {
+        const match = s.textContent?.match(/["']memberId["']\s*:\s*["']([^"']+)["']/)
+        if (match) return match[1]
+      }
+    } catch { }
+    return ''
+  }
+
   async function get_dom_all_data() {
     console.log('get_dom_all_data: 开始 获取页面数据');
     try {
@@ -49,11 +72,15 @@ export const useDomStore = defineStore('dom', () => {
       let imageUrl = ''
       try {
         const galleryList = document.querySelectorAll('.od-gallery-list li')
-        if (galleryList.length > 1 && galleryList[1]) {
+        const galleryList1 = document.querySelector('.od-gallery-list li img')
+        console.log('galleryList1:', galleryList1)
+        if (galleryList1) {
+          imageUrl = galleryList1?.src || ''
+          console.log('imageUrl:', imageUrl)
+        } else if (galleryList.length > 1 && galleryList[1]) {
           const img = galleryList[1].querySelector('img')
           imageUrl = img?.src || ''
-        }
-        if (!imageUrl) {
+        } else if (!imageUrl) {
           const detailGallery = document.querySelectorAll('#root-container .detail-gallery-turn-wrapper')
           if (detailGallery.length > 1 && detailGallery[1]) {
             const img = detailGallery[1].querySelector('img')
@@ -70,6 +97,7 @@ export const useDomStore = defineStore('dom', () => {
         title: titles || '',
         imageUrl: imageUrl || '',
         productId: (window.location.href.match(/offer\/(\d+)\.html/)?.[1] ?? null) || '',
+        memberId: extractMemberId() || '',
       }
     } catch (error) {
       console.error('获取 DOM 元素失败:', error)
@@ -79,6 +107,7 @@ export const useDomStore = defineStore('dom', () => {
         title: '',
         imageUrl: '',
         productId: (window.location.href.match(/offer\/(\d+)\.html/)?.[1] ?? null) || '',
+        memberId: extractMemberId() || '',
       }
     }
   }
