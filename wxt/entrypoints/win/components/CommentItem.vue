@@ -1,12 +1,12 @@
 <template>
-  <div class="comment-item">
+  <div class="comment-item" :data-cmt-id="comment.id">
     <div class="cmt-avatar" :style="{ background: avatarColor }">{{ avatarInitial }}</div>
     <div class="cmt-body">
       <div class="cmt-header">
         <span class="cmt-name">{{ comment.username }}</span>
         <span class="cmt-time">{{ timeAgo }}</span>
       </div>
-      <div class="cmt-text" v-html="resolvedHtml"></div>
+      <div ref="textRef" class="cmt-text" v-html="resolvedHtml"></div>
       <div class="cmt-actions">
         <template v-if="isMine">
           <span class="cmt-action-btn" @click.stop="$emit('edit', comment)">
@@ -28,57 +28,64 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, nextTick } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import Viewer from 'viewerjs'
+import 'viewerjs/dist/viewer.css'
 
 const props = defineProps({
   comment: { type: Object, required: true },
   currentUser: { type: String, default: '' },
 })
 
+defineEmits(['edit', 'delete'])
+
 const resolvedHtml = ref(props.comment.text)
+const textRef = ref(null)
+let viewer = null
 
 onMounted(async () => {
   const html = props.comment.text || ''
-  console.log('[CommentItem] 原始 HTML 长度:', html.length, '含uploads:', /\/uploads\//.test(html))
-  if (!/\/uploads\//.test(html)) { resolvedHtml.value = html; return }
-
-  let result = html
-  const imgRegex = /src="([^"]*\/uploads\/[^"]*)"/g
-  let match
-  let count = 0
-
-  while ((match = imgRegex.exec(html)) !== null) {
-    count++
-    const url = match[1]
-    console.log(`[CommentItem] 图片 #${count}:`, url.substring(0, 80))
-    try {
-      console.log('[CommentItem] 开始 fetch:', url.substring(0, 80))
-      const res = await fetch(url)
-      console.log('[CommentItem] fetch 结果:', res.status, res.statusText)
-      const blob = await res.blob()
-      console.log('[CommentItem] blob 大小:', blob.size)
-      const blobUrl = URL.createObjectURL(blob)
-      console.log('[CommentItem] blobUrl:', blobUrl.substring(0, 50))
-      result = result.replace(url, blobUrl)
-      console.log('[CommentItem] 替换成功')
-    } catch (e) {
-      console.error('[CommentItem] 图片加载失败:', e.message || e, url.substring(0, 80))
+  if (/\/uploads\//.test(html)) {
+    let result = html
+    const imgRegex = /src="([^"]*\/uploads\/[^"]*)"/g
+    let match
+    while ((match = imgRegex.exec(html)) !== null) {
+      try {
+        const res = await fetch(match[1])
+        const blob = await res.blob()
+        result = result.replace(match[1], URL.createObjectURL(blob))
+      } catch {}
     }
+    resolvedHtml.value = result
   }
 
-  console.log('[CommentItem] 共处理', count, '张图片')
-  resolvedHtml.value = result
+  // 等 DOM 渲染后初始化 viewerjs
+  await nextTick()
+  setTimeout(() => {
+    if (textRef.value && textRef.value.querySelector('img')) {
+      viewer = new Viewer(textRef.value, {
+        inline: false,
+        navbar: false,
+        toolbar: {
+          zoomIn: true, zoomOut: true, oneToOne: true, reset: true,
+          prev: true, play: false, next: true,
+          rotateLeft: true, rotateRight: true,
+          flipHorizontal: true, flipVertical: true,
+        },
+      })
+    }
+  }, 300)
 })
 
-defineEmits(['edit', 'delete'])
+onBeforeUnmount(() => {
+  if (viewer) { viewer.destroy(); viewer = null }
+})
 
 const isMine = computed(() => props.comment.username === props.currentUser)
 
-// 用用户名生成稳定的头像颜色
 const colorPool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
 const avatarColor = computed(() => {
-  let hash = 0
-  const name = props.comment.username || ''
+  let hash = 0; const name = props.comment.username || ''
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
   return colorPool[Math.abs(hash) % colorPool.length]
 })
@@ -86,139 +93,51 @@ const avatarInitial = computed(() => (props.comment.username || '?').charAt(0).t
 
 function parseDate(dateStr) {
   if (!dateStr) return null
-  // SQLite 格式 "2026-05-31 03:34:01" → ISO
-  if (dateStr.includes(' ') && !dateStr.includes('T')) {
-    return new Date(dateStr.replace(' ', 'T') + '.000Z')
-  }
+  if (dateStr.includes(' ') && !dateStr.includes('T')) return new Date(dateStr.replace(' ', 'T') + '.000Z')
   return new Date(dateStr)
 }
 
 function formatTime(dateStr) {
   if (!dateStr) return ''
-  const now = new Date()
   const t = parseDate(dateStr)
   if (!t || isNaN(t)) return ''
-  const diff = Math.floor((now - t) / 1000)
+  const diff = Math.floor((Date.now() - t) / 1000)
   if (diff < 60) return '刚刚'
   if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
   if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
   if (diff < 604800) return `${Math.floor(diff / 86400)}天前`
-  if (diff < 2592000) return `${Math.floor(diff / 604800)}周前`
   const m = String(t.getMonth() + 1).padStart(2, '0')
   const d = String(t.getDate()).padStart(2, '0')
   return `${m}/${d}`
 }
 
 const timeAgo = computed(() => {
-  if (props.comment.updated_at) {
-    return formatTime(props.comment.updated_at) + ' (已编辑)'
-  }
+  if (props.comment.updated_at) return formatTime(props.comment.updated_at) + ' (已编辑)'
   return formatTime(props.comment.created_at)
 })
 </script>
 
 <style scoped>
-.comment-item {
-  display: flex;
-  gap: 8px;
-  padding: 10px 12px;
-}
-.comment-item + .comment-item {
-  border-top: 1px solid #f5f5f5;
-}
-.cmt-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.cmt-body {
-  flex: 1;
-  min-width: 0;
-}
-.cmt-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 2px;
-}
-.cmt-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: #333;
-}
-.cmt-time {
-  font-size: 11px;
-  color: #bbb;
-}
-.cmt-text {
-  font-size: 13px;
-  color: #1a1a1a;
-  line-height: 1.5;
-  word-break: break-word;
-  margin-bottom: 4px;
-  overflow-wrap: break-word;
-}
-.cmt-text :deep(ul),
-.cmt-text :deep(ol) {
-  padding-left: 18px;
-  margin: 4px 0;
-}
-.cmt-text :deep(li) {
-  margin-bottom: 2px;
-}
-.cmt-text :deep(p) {
-  margin: 0 0 4px;
-}
-.cmt-text :deep(p:last-child) {
-  margin-bottom: 0;
-}
-.cmt-text :deep(img) {
-  max-width: 100%;
-  height: auto;
-  border-radius: 4px;
-}
-.cmt-actions {
-  display: flex;
-  align-items: center;
-}
-.cmt-like {
-  font-size: 12px;
-  color: #999;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
-  user-select: none;
-  transition: all 0.15s;
-}
-.cmt-like:hover {
-  background: #fff0f0;
-}
-.cmt-like.liked {
-  color: #ff6a00;
-}
-.cmt-action-btn {
-  font-size: 12px;
-  color: #bbb;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
-  display: inline-flex;
-  align-items: center;
-  transition: all 0.15s;
-}
-.cmt-action-btn:hover {
-  background: #f0f0f0;
-  color: #666;
-}
-.cmt-delete-btn:hover {
-  background: #fff0f0;
-  color: #e74c3c;
-}
+.comment-item { display: flex; gap: 8px; padding: 10px 12px; }
+.comment-item + .comment-item { border-top: 1px solid #f5f5f5; }
+.cmt-avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.cmt-body { flex: 1; min-width: 0; }
+.cmt-header { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.cmt-name { font-size: 12px; font-weight: 600; color: #333; }
+.cmt-time { font-size: 11px; color: #bbb; }
+.cmt-text { font-size: 13px; color: #1a1a1a; line-height: 1.5; word-break: break-word; margin-bottom: 4px; overflow-wrap: break-word; }
+.cmt-text :deep(ul), .cmt-text :deep(ol) { padding-left: 18px; margin: 4px 0; }
+.cmt-text :deep(li) { margin-bottom: 2px; }
+.cmt-text :deep(p) { margin: 0 0 4px; }
+.cmt-text :deep(p:last-child) { margin-bottom: 0; }
+.cmt-text :deep(img) { max-width: 100%; max-height: 300px; height: auto; border-radius: 4px; cursor: pointer; object-fit: contain; }
+.cmt-actions { display: flex; align-items: center; }
+.cmt-action-btn { font-size: 12px; color: #bbb; cursor: pointer; padding: 2px 4px; border-radius: 4px; display: inline-flex; align-items: center; transition: all 0.15s; }
+.cmt-action-btn:hover { background: #f0f0f0; color: #666; }
+.cmt-delete-btn:hover { background: #fff0f0; color: #e74c3c; }
+</style>
+
+<style>
+.viewer-container { z-index: 2147483647 !important; }
+.viewer-toolbar { z-index: 2147483648 !important; }
 </style>

@@ -20,6 +20,7 @@
     "echarts": "^6.1.0",
     "element-plus": "^2.14.1",
     "pinia": "^3.0.4",
+    "viewerjs": "^1.11.7",
     "vue": "^3.5.29",
     "vue-router": "^5.0.7"
   },
