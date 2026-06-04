@@ -1,6 +1,8 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { api } from './useApi.js'
+import { List, Grid, ArrowDown } from '@element-plus/icons-vue'
+import ProductMasonryCard from './ProductMasonryCard.vue'
 
 const products = ref([])
 const total = ref(0)
@@ -117,6 +119,9 @@ const selectedTagLabel = computed(() => {
   const t = allMyTags.value.find(t => t.id === selectedTagId.value)
   return t ? t.text : ''
 })
+
+// 视图模式：table 表格 / masonry 瀑布流
+const viewMode = ref('table')
 </script>
 <template>
   <section>
@@ -164,12 +169,23 @@ const selectedTagLabel = computed(() => {
         'asc'
         ? '↑' : '↓') : '' }}</el-button>
       <el-button size="small" text @click="onSort('')">默认</el-button>
+
+      <!-- 视图切换 -->
+      <div class="view-toggle">
+        <el-button :type="viewMode === 'table' ? 'primary' : ''" size="small" @click="viewMode = 'table'">
+          <el-icon><List /></el-icon>
+        </el-button>
+        <el-button :type="viewMode === 'masonry' ? 'primary' : ''" size="small" @click="viewMode = 'masonry'">
+          <el-icon><Grid /></el-icon>
+        </el-button>
+      </div>
     </div>
 
     <el-card>
       <el-empty v-if="products.length === 0" description="暂无商品" />
       <template v-else>
-        <el-table :data="products" stripe @row-click="openDrawer" row-class-name="clickable-row">
+        <!-- 表格视图 -->
+        <el-table v-if="viewMode === 'table'" :data="products" stripe @row-click="openDrawer" row-class-name="clickable-row">
           <el-table-column label="图片" width="70">
             <template #default="{ row }">
               <el-image v-if="row.main_img_url" :src="row.main_img_url" style="width:48px;height:48px;border-radius:4px"
@@ -199,6 +215,16 @@ const selectedTagLabel = computed(() => {
           <el-table-column prop="comment_count" label="评论" width="70" align="center" />
           <el-table-column prop="view_count" label="浏览" width="70" align="center" />
         </el-table>
+
+        <!-- 瀑布流视图 -->
+        <div v-else class="masonry-grid">
+          <ProductMasonryCard
+            v-for="row in products"
+            :key="row.offer_id"
+            :product="row"
+            @click="openDrawer"
+          />
+        </div>
         <div class="pagination">
           <el-pagination
             v-model:current-page="currentPage"
@@ -287,11 +313,18 @@ const selectedTagLabel = computed(() => {
   color: #999;
 }
 
+.view-toggle {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
 .product-link {
   color: #303133;
   text-decoration: none;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -409,5 +442,12 @@ const selectedTagLabel = computed(() => {
   display: flex;
   justify-content: center;
   padding: 16px 0;
+}
+
+/* 瀑布流布局 */
+.masonry-grid {
+  column-count: 8;
+  column-gap: 12px;
+  text-align: left;
 }
 </style>

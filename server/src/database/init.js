@@ -245,7 +245,29 @@ db.exec(`
 `)
 
 // ============================================================
-// 16. operation_logs — 操作日志
+// 13. product_updates — 产品更新日志
+//   id           UUID主键
+//   version      版本号
+//   title        更新标题
+//   content      更新内容（支持HTML）
+//   status       状态 published=已发布 draft=草稿
+//   created_at   创建时间
+//   updated_at   更新时间
+// ============================================================
+db.exec(`
+  CREATE TABLE IF NOT EXISTS product_updates (
+    id TEXT PRIMARY KEY,
+    version TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT DEFAULT 'draft',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`)
+
+// ============================================================
+// 14. operation_logs — 操作日志
 //   id          UUID主键
 //   user_id     操作者用户ID
 //   action      操作类型 (login/logout/create/update/delete 等)
@@ -299,7 +321,37 @@ if (adminUser) {
     insertUser.run(u.username, u.email, u.password)
   }
 
-  console.log('Seed data inserted (users only)')
+  // --- 产品更新日志 ---
+  const insertUpdate = db.prepare(`
+    INSERT INTO product_updates (id, version, title, content, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `)
+  insertUpdate.run(
+    generateId(),
+    '1.0.0',
+    '正式发布',
+    '<ul><li>新增商品管理瀑布流视图</li><li>支持评论图片点击放大查看</li><li>优化搜索筛选功能</li><li>修复若干已知问题</li></ul>',
+    'published',
+    '2026-06-04 10:00:00'
+  )
+  insertUpdate.run(
+    generateId(),
+    '0.9.0',
+    '测试版本',
+    '<ul><li>实现商品评论功能</li><li>添加标签系统</li><li>创建浏览记录</li></ul>',
+    'published',
+    '2026-05-20 15:30:00'
+  )
+  insertUpdate.run(
+    generateId(),
+    '0.8.0',
+    '基础功能',
+    '<ul><li>用户登录注册</li><li>商品数据采集</li><li>供应商管理</li></ul>',
+    'published',
+    '2026-05-01 09:00:00'
+  )
+
+  console.log('Seed data inserted (users + updates)')
 }
 
 /**

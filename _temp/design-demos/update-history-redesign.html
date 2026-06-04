@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ALOCS-1688 · 更新历史页面重设计</title>
+<!--
+  === Junior Designer Pass: Assumptions ===
+  1. 叙事角色：产品 changelog + 品牌展示页——管理员读历史，也是产品演进的"名片"
+  2. 观众距离：桌面浏览器 ~60cm，字号 13-16px
+  3. 视觉温度：专业 + 微暖——B端工具但不冷冰冰
+  4. 设计哲学：Pentagram 信息建筑派——克制、层级清晰、排版驱动
+  5. 品牌资产：logo.svg（抽象几何图形，黑 #040000），
+     品牌渐变 #667eea → #764ba2（来自现有代码）
+  6. 两个视图：A.版本历史（时间线） B.发布更新（编辑器表单）
+-->
+
+<style>
+/* ===== Reset & Tokens ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --brand-color: #3b82f6;
+  --brand-hover: #2563eb;
+  --brand-subtle: rgba(59,130,246,0.08);
+  --ink-primary: #1f2937;
+  --ink-secondary: #4b5563;
+  --ink-tertiary: #9ca3af;
+  --surface-bg: #f9fafb;
+  --surface-card: #ffffff;
+  --border-light: #e5e7eb;
+  --border-medium: #d1d5db;
+  --green: #10b981;
+  --green-bg: #d1fae5;
+  --amber: #f59e0b;
+  --amber-bg: #fef3c7;
+  --red: #ef4444;
+  --red-bg: #fee2e2;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.03), 0 1px 3px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 10px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.05);
+  --shadow-lg: 0 6px 20px rgba(0,0,0,0.05), 0 2px 6px rgba(0,0,0,0.04);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--surface-bg);
+  color: var(--ink-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* ===== Layout ===== */
+.app-shell {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+
+/* ===== Top Nav ===== */
+.top-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 28px;
+  padding: 4px;
+  background: var(--surface-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-light);
+}
+
+.nav-tab {
+  flex: 1;
+  padding: 10px 20px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-tertiary);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: none;
+  background: none;
+  font-family: inherit;
+}
+
+.nav-tab.active {
+  color: var(--brand-color);
+  background: var(--brand-subtle);
+  font-weight: 600;
+}
+
+.nav-tab:hover:not(.active) {
+  color: var(--ink-secondary);
+  background: rgba(0,0,0,0.03);
+}
+
+.nav-tab-icon {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 15px;
+}
+
+.view { display: none; }
+.view.active { display: block; }
+
+/* ===== Product Card ===== */
+.product-card {
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  padding: 28px 32px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-light);
+}
+
+.product-card-logo {
+  width: 64px;
+  height: 64px;
+  background: var(--brand-subtle);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.product-card-logo svg {
+  width: 40px;
+  height: 40px;
+  opacity: 0.85;
+}
+
+.product-card-info { flex: 1; }
+
+.product-card-name {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink-primary);
+  margin-bottom: 6px;
+  letter-spacing: -0.3px;
+}
+
+.product-card-meta {
+  display: flex;
+  gap: 20px;
+  font-size: 13px;
+  color: var(--ink-tertiary);
+}
+
+.product-card-meta span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.product-card-meta .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.4);
+  display: inline-block;
+}
+
+.product-card-version {
+  font-size: 13px;
+  color: rgba(255,255,255,0.6);
+  margin-top: 4px;
+}
+
+/* ===== Section Title ===== */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: -0.2px;
+}
+
+.section-title-icon {
+  color: var(--brand-color);
+  font-size: 18px;
+}
+
+.section-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-color);
+  background: var(--brand-subtle);
+  padding: 3px 10px;
+  border-radius: 100px;
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--brand-color);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: inherit;
+  box-shadow: 0 2px 8px rgba(59,130,246,0.25);
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  background: var(--brand-hover);
+  box-shadow: 0 4px 14px rgba(59,130,246,0.35);
+}
+
+.btn-primary:active { transform: translateY(0); }
+
+/* ===== Timeline ===== */
+.timeline {
+  position: relative;
+  padding-left: 0;
+}
+
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 27px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--border-light);
+  border-radius: 1px;
+}
+
+.timeline-item {
+  display: flex;
+  gap: 16px;
+  padding: 6px 0 6px 0;
+  position: relative;
+}
+
+.timeline-item:not(:last-child) { margin-bottom: 6px; }
+
+.timeline-dot-wrap {
+  flex-shrink: 0;
+  width: 56px;
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
+
+.timeline-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 3px solid;
+  background: var(--surface-card);
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+}
+
+.timeline-dot.published {
+  border-color: var(--green);
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(39,174,96,0.12);
+}
+
+.timeline-dot.draft {
+  border-color: var(--amber);
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(245,158,11,0.12);
+}
+
+.timeline-card {
+  flex: 1;
+  background: var(--surface-card);
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-light);
+  transition: box-shadow var(--transition-normal);
+}
+
+.timeline-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.timeline-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.timeline-version {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-primary);
+  letter-spacing: -0.2px;
+}
+
+.timeline-version-num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-tertiary);
+  margin-right: 4px;
+}
+
+.timeline-status {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 100px;
+  flex-shrink: 0;
+  letter-spacing: 0.2px;
+}
+
+.timeline-status.published {
+  color: var(--green);
+  background: var(--green-bg);
+}
+
+.timeline-status.draft {
+  color: var(--amber);
+  background: var(--amber-bg);
+}
+
+.timeline-content {
+  font-size: 14px;
+  color: var(--ink-secondary);
+  line-height: 1.8;
+}
+
+.timeline-content ul {
+  list-style: none;
+  padding: 0;
+}
+
+.timeline-content li {
+  position: relative;
+  padding-left: 16px;
+  margin-bottom: 4px;
+}
+
+.timeline-content li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-medium);
+}
+
+.timeline-card-footer {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--ink-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timeline-card-footer .sep {
+  color: var(--border-medium);
+}
+
+/* ===== Editor View ===== */
+.editor-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.editor-sidebar {
+  background: var(--surface-card);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-light);
+}
+
+.editor-sidebar-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 18px;
+}
+
+.form-group {
+  margin-bottom: 18px;
+}
+
+.form-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-secondary);
+  margin-bottom: 6px;
+}
+
+.form-input {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  color: var(--ink-primary);
+  transition: border-color var(--transition-fast);
+  background: var(--surface-bg);
+  outline: none;
+}
+
+.form-input:focus {
+  border-color: var(--brand-color);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+  background: var(--surface-card);
+}
+
+.form-input::placeholder {
+  color: var(--ink-tertiary);
+}
+
+.editor-main {
+  background: var(--surface-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-light);
+  overflow: hidden;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--surface-bg);
+  flex-wrap: wrap;
+}
+
+.toolbar-group {
+  display: flex;
+  gap: 1px;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-medium);
+  margin: 0 6px;
+}
+
+.toolbar-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--ink-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  font-family: inherit;
+}
+
+.toolbar-btn:hover {
+  background: rgba(0,0,0,0.06);
+  color: var(--ink-primary);
+}
+
+.toolbar-btn.active {
+  background: var(--brand-subtle);
+  color: var(--brand-color);
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid var(--border-medium);
+  background: var(--surface-card);
+  color: var(--ink-secondary);
+  font-family: inherit;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-sm:hover {
+  border-color: var(--brand-color);
+  color: var(--brand-color);
+}
+
+.btn-sm.primary {
+  background: var(--brand-color);
+  color: #fff;
+  border: none;
+  box-shadow: 0 2px 6px rgba(59,130,246,0.2);
+}
+
+.btn-sm.primary:hover {
+  background: var(--brand-hover);
+  box-shadow: 0 3px 10px rgba(59,130,246,0.35);
+  transform: translateY(-1px);
+}
+
+.editor-body {
+  padding: 20px 24px;
+  min-height: 320px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--ink-secondary);
+  outline: none;
+}
+
+.editor-body:empty::before {
+  content: '请输入更新内容...';
+  color: var(--ink-tertiary);
+  pointer-events: none;
+}
+
+.editor-body:focus {
+  color: var(--ink-primary);
+}
+
+.editor-body h1 { font-size: 22px; margin-bottom: 8px; color: var(--ink-primary); }
+.editor-body h2 { font-size: 18px; margin-bottom: 6px; color: var(--ink-primary); }
+.editor-body ul, .editor-body ol { padding-left: 20px; margin: 8px 0; }
+.editor-body li { margin-bottom: 4px; }
+
+/* ===== Preview Panel ===== */
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.preview-panel {
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+}
+
+.preview-panel h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink-primary);
+  margin-bottom: 20px;
+}
+
+.preview-version-label {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--brand-end);
+  margin-bottom: 12px;
+}
+
+.preview-content {
+  font-size: 14px;
+  color: var(--ink-secondary);
+  line-height: 1.8;
+}
+
+.preview-close {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 700px) {
+  .editor-layout {
+    grid-template-columns: 1fr;
+  }
+  .product-card {
+    flex-direction: column;
+    text-align: center;
+  }
+  .product-card-meta {
+    justify-content: center;
+  }
+}
+
+/* ===== Empty State ===== */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--ink-tertiary);
+}
+
+.empty-state-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+.empty-state-text {
+  font-size: 14px;
+}
+
+/* ===== Animations ===== */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.timeline-item {
+  animation: fadeInUp 0.4s ease backwards;
+}
+
+.timeline-item:nth-child(1) { animation-delay: 0s; }
+.timeline-item:nth-child(2) { animation-delay: 0.08s; }
+.timeline-item:nth-child(3) { animation-delay: 0.16s; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- Top Nav Tabs -->
+  <nav class="top-nav">
+    <button class="nav-tab active" onclick="switchView('history')">
+      <span class="nav-tab-icon">&#x1F4C5;</span>版本历史
+    </button>
+    <button class="nav-tab" onclick="switchView('editor')">
+      <span class="nav-tab-icon">&#x270F;&#xFE0F;</span>发布更新
+    </button>
+  </nav>
+
+  <!-- ===== View A: 版本历史 ===== -->
+  <div id="view-history" class="view active">
+
+    <!-- 产品卡片 -->
+    <div class="product-card">
+      <div class="product-card-logo">
+        <!-- 内联 logo.svg -->
+        <svg viewBox="0 0 16933.32 16933.32" fill="white">
+          <path d="M7400.7 975.37l0 6271.76c0,378.07 -201.69,727.63 -529.15,916.49l-535.92 309.29 -4895.62 2826.06c-226.27,130.77 -517.04,23.16 -601.48,-224.49 -279,-816 -430.44,-1691.5 -430.44,-2601.57 0,-910.07 144.31,-1748.15 411.92,-2548.12 73.04,-218.07 327.11,-314.99 526.3,-199.9l2037.14 1176.24c186,106.55 388.04,157.5 587.59,157.5 408,0 804.6,-212.01 1024.1,-590.08 326.04,-564.07 132.55,-1285.64 -431.52,-1611.68l-2035 -1174.47c-199.54,-115.1 -242.31,-384.12 -89.44,-556.58 1146.67,-1292.77 2702.76,-2212.81 4465.17,-2558.81 256.92,-50.59 496.01,146.81 496.01,408.71l0.34 -0.35z"/>
+          <path d="M14532.99 13777.94c-1138.48,1301.31 -2689.22,2231.69 -4448.07,2589.09 -225.91,45.96 -437.57,-125.07 -437.57,-355.62l0 -2350c0,-326.04 -132.55,-621.08 -345.99,-834.52 -231.26,-231.26 -558.37,-367.73 -916.84,-343.14 -623.93,42.75 -1097.85,583.67 -1097.85,1209.03l0 2318.29c0,230.55 -212.02,401.58 -437.58,355.61 -1759.2,-357.39 -3309.59,-1287.77 -4448.06,-2589.09 -172.11,-196.69 -120.09,-502.42 106.19,-633.19l4893.48 -2825.7 536.63 -310.01c327.82,-189.2 731.55,-189.2 1059.37,0l536.63 310.01 4893.48 2825.7c226.62,130.77 278.3,436.5 106.19,633.19l-0.01 0.35z"/>
+          <path d="M16525.23 8472.9c0,910.07 -151.08,1785.58 -430.09,2601.57 -84.45,247.29 -375.21,354.9 -601.48,224.49l-4895.62 -2826.06 -535.91 -309.29c-327.47,-189.21 -529.15,-538.41 -529.15,-916.49l0 -6271.76c0,-261.55 239.09,-458.95 496.01,-408.71 1762.41,345.99 3318.49,1266.04 4465.17,2558.81 152.87,172.46 110.11,441.49 -89.44,556.58l-2035 1174.47c-378.06,218.07 -590.09,615.02 -590.09,1022.66 0,199.54 50.96,403.01 158.56,589.01 326.05,564.07 1047.61,757.56 1611.68,432.59l2037.14 -1176.24c199.19,-115.1 453.61,-18.18 526.3,199.9 267.6,799.96 411.92,1657.29 411.92,2548.12l0 0.35z"/>
+        </svg>
+      </div>
+      <div class="product-card-info">
+        <div class="product-card-name">ALOCS-1688 采购助手</div>
+        <div class="product-card-meta">
+          <span>当前版本 v1.0.0</span>
+          <span class="dot"></span>
+          <span>制作人 Conley</span>
+          <span class="dot"></span>
+          <span>共 3 个版本</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 时间线标题 -->
+    <div class="section-header">
+      <div class="section-title">
+        <span class="section-title-icon">&#x1F4C6;</span>产品版本更新
+        <span class="section-badge">3 条记录</span>
+      </div>
+      <button class="btn-primary" onclick="switchView('editor')">
+        <span style="font-size:15px;">+</span> 发布更新
+      </button>
+    </div>
+
+    <!-- 版本时间线 -->
+    <div class="timeline">
+
+      <!-- item 1: published -->
+      <div class="timeline-item">
+        <div class="timeline-dot-wrap">
+          <div class="timeline-dot published"></div>
+        </div>
+        <div class="timeline-card">
+          <div class="timeline-card-header">
+            <div class="timeline-version">
+              <span class="timeline-version-num">v1.0.0</span>正式发布
+            </div>
+            <span class="timeline-status published">已发布</span>
+          </div>
+          <div class="timeline-content">
+            <ul>
+              <li>新增商品管理瀑布流视图</li>
+              <li>支持评论图片点击放大查看</li>
+              <li>优化搜索筛选功能</li>
+              <li>修复若干已知问题</li>
+            </ul>
+          </div>
+          <div class="timeline-card-footer">
+            2026-06-04 10:00
+          </div>
+        </div>
+      </div>
+
+      <!-- item 2: published -->
+      <div class="timeline-item">
+        <div class="timeline-dot-wrap">
+          <div class="timeline-dot published"></div>
+        </div>
+        <div class="timeline-card">
+          <div class="timeline-card-header">
+            <div class="timeline-version">
+              <span class="timeline-version-num">v0.9.0</span>测试版本
+            </div>
+            <span class="timeline-status published">已发布</span>
+          </div>
+          <div class="timeline-content">
+            <ul>
+              <li>完成基础商品信息采集</li>
+              <li>添加标签管理功能</li>
+              <li>实现评论系统</li>
+            </ul>
+          </div>
+          <div class="timeline-card-footer">
+            2026-05-20 14:30
+          </div>
+        </div>
+      </div>
+
+      <!-- item 3: published -->
+      <div class="timeline-item">
+        <div class="timeline-dot-wrap">
+          <div class="timeline-dot published"></div>
+        </div>
+        <div class="timeline-card">
+          <div class="timeline-card-header">
+            <div class="timeline-version">
+              <span class="timeline-version-num">v0.8.0</span>基础功能
+            </div>
+            <span class="timeline-status published">已发布</span>
+          </div>
+          <div class="timeline-content">
+            <ul>
+              <li>项目初始化</li>
+              <li>浏览器扩展框架搭建</li>
+              <li>1688 页面数据注入</li>
+            </ul>
+          </div>
+          <div class="timeline-card-footer">
+            2026-05-01 09:00
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===== View B: 发布更新 ===== -->
+  <div id="view-editor" class="view">
+
+    <!-- 产品卡片（精简版） -->
+    <div class="product-card" style="margin-bottom:20px;">
+      <div class="product-card-logo">
+        <svg viewBox="0 0 16933.32 16933.32" fill="white" width="40" height="40">
+          <path d="M7400.7 975.37l0 6271.76c0,378.07 -201.69,727.63 -529.15,916.49l-535.92 309.29 -4895.62 2826.06c-226.27,130.77 -517.04,23.16 -601.48,-224.49 -279,-816 -430.44,-1691.5 -430.44,-2601.57 0,-910.07 144.31,-1748.15 411.92,-2548.12 73.04,-218.07 327.11,-314.99 526.3,-199.9l2037.14 1176.24c186,106.55 388.04,157.5 587.59,157.5 408,0 804.6,-212.01 1024.1,-590.08 326.04,-564.07 132.55,-1285.64 -431.52,-1611.68l-2035 -1174.47c-199.54,-115.1 -242.31,-384.12 -89.44,-556.58 1146.67,-1292.77 2702.76,-2212.81 4465.17,-2558.81 256.92,-50.59 496.01,146.81 496.01,408.71l0.34 -0.35z"/>
+          <path d="M14532.99 13777.94c-1138.48,1301.31 -2689.22,2231.69 -4448.07,2589.09 -225.91,45.96 -437.57,-125.07 -437.57,-355.62l0 -2350c0,-326.04 -132.55,-621.08 -345.99,-834.52 -231.26,-231.26 -558.37,-367.73 -916.84,-343.14 -623.93,42.75 -1097.85,583.67 -1097.85,1209.03l0 2318.29c0,230.55 -212.02,401.58 -437.58,355.61 -1759.2,-357.39 -3309.59,-1287.77 -4448.06,-2589.09 -172.11,-196.69 -120.09,-502.42 106.19,-633.19l4893.48 -2825.7 536.63 -310.01c327.82,-189.2 731.55,-189.2 1059.37,0l536.63 310.01 4893.48 2825.7c226.62,130.77 278.3,436.5 106.19,633.19l-0.01 0.35z"/>
+          <path d="M16525.23 8472.9c0,910.07 -151.08,1785.58 -430.09,2601.57 -84.45,247.29 -375.21,354.9 -601.48,224.49l-4895.62 -2826.06 -535.91 -309.29c-327.47,-189.21 -529.15,-538.41 -529.15,-916.49l0 -6271.76c0,-261.55 239.09,-458.95 496.01,-408.71 1762.41,345.99 3318.49,1266.04 4465.17,2558.81 152.87,172.46 110.11,441.49 -89.44,556.58l-2035 1174.47c-378.06,218.07 -590.09,615.02 -590.09,1022.66 0,199.54 50.96,403.01 158.56,589.01 326.05,564.07 1047.61,757.56 1611.68,432.59l2037.14 -1176.24c199.19,-115.1 453.61,-18.18 526.3,199.9 267.6,799.96 411.92,1657.29 411.92,2548.12l0 0.35z"/>
+        </svg>
+      </div>
+      <div class="product-card-info">
+        <div class="product-card-name">ALOCS-1688 采购助手</div>
+        <div class="product-card-meta">
+          <span>发布新的版本更新</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 编辑器布局 -->
+    <div class="editor-layout">
+
+      <!-- 左侧表单 -->
+      <div class="editor-sidebar">
+        <div class="editor-sidebar-title">版本信息</div>
+
+        <div class="form-group">
+          <label class="form-label">版本号</label>
+          <input class="form-input" type="text" placeholder="例如：1.0.0" value="">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">更新标题</label>
+          <input class="form-input" type="text" placeholder="例如：正式发布" value="">
+        </div>
+
+        <div class="form-group" style="margin-bottom:6px;">
+          <label class="form-label">状态</label>
+          <div style="display:flex;gap:8px;font-size:12px;color:var(--ink-tertiary);">
+            <span style="color:var(--green);font-weight:600;">&#x25CF; 发布后可见于用户端</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右侧编辑器 -->
+      <div class="editor-main">
+        <!-- 工具栏 -->
+        <div class="editor-toolbar">
+          <div class="toolbar-group">
+            <button class="toolbar-btn" title="撤销">&#x21A9;</button>
+            <button class="toolbar-btn" title="重做">&#x21AA;</button>
+          </div>
+          <span class="toolbar-divider"></span>
+          <div class="toolbar-group">
+            <button class="toolbar-btn active" title="加粗"><b>B</b></button>
+            <button class="toolbar-btn" title="斜体"><i>I</i></button>
+            <button class="toolbar-btn" title="下划线"><u>U</u></button>
+            <button class="toolbar-btn" title="删除线"><s>S</s></button>
+          </div>
+          <span class="toolbar-divider"></span>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" title="标题">H</button>
+            <button class="toolbar-btn" title="字号">A<span style="font-size:9px;">&#x25BC;</span></button>
+            <button class="toolbar-btn" title="颜色">&#x25A0;</button>
+          </div>
+          <span class="toolbar-divider"></span>
+          <div class="toolbar-group">
+            <button class="toolbar-btn" title="有序列表">1.</button>
+            <button class="toolbar-btn" title="无序列表">&#x2022;</button>
+            <button class="toolbar-btn" title="引用">&#x201C;</button>
+            <button class="toolbar-btn" title="链接">&#x1F517;</button>
+          </div>
+          <div class="toolbar-spacer"></div>
+          <div class="toolbar-actions">
+            <button class="btn-sm" onclick="alert('草稿已保存（Demo）')">&#x1F4BE; 保存草稿</button>
+            <button class="btn-sm" onclick="showPreview()">&#x1F441; 预览</button>
+            <button class="btn-sm primary" onclick="alert('已发布（Demo）')">&#x1F680; 发布</button>
+          </div>
+        </div>
+
+        <!-- 编辑区域 -->
+        <div class="editor-body" contenteditable="true">
+          <p style="margin-bottom:8px;"><b>新增功能</b></p>
+          <ul>
+            <li>新增商品管理瀑布流视图</li>
+            <li>支持评论图片点击放大查看</li>
+          </ul>
+          <p style="margin-bottom:8px;margin-top:12px;"><b>优化改进</b></p>
+          <ul>
+            <li>优化搜索筛选功能</li>
+            <li>修复若干已知问题</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===== 预览弹窗 ===== -->
+  <div id="preview-overlay" class="preview-overlay" style="display:none;" onclick="hidePreview(event)">
+    <div class="preview-panel" onclick="event.stopPropagation()">
+      <h3>&#x1F441; 预览</h3>
+      <div class="preview-version-label">v1.0.0 正式发布</div>
+      <div class="preview-content">
+        <p style="margin-bottom:6px;"><b>新增功能</b></p>
+        <ul style="padding-left:20px;margin-bottom:10px;">
+          <li>新增商品管理瀑布流视图</li>
+          <li>支持评论图片点击放大查看</li>
+        </ul>
+        <p style="margin-bottom:6px;"><b>优化改进</b></p>
+        <ul style="padding-left:20px;">
+          <li>优化搜索筛选功能</li>
+          <li>修复若干已知问题</li>
+        </ul>
+      </div>
+      <div class="preview-close">
+        <button class="btn-sm primary" onclick="document.getElementById('preview-overlay').style.display='none'">关闭预览</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function switchView(view) {
+  // Update tabs
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+
+  if (view === 'history') {
+    document.querySelector('.nav-tab:nth-child(1)').classList.add('active');
+    document.getElementById('view-history').classList.add('active');
+  } else {
+    document.querySelector('.nav-tab:nth-child(2)').classList.add('active');
+    document.getElementById('view-editor').classList.add('active');
+  }
+}
+
+function showPreview() {
+  document.getElementById('preview-overlay').style.display = 'flex';
+}
+
+function hidePreview(e) {
+  if (e.target === document.getElementById('preview-overlay')) {
+    document.getElementById('preview-overlay').style.display = 'none';
+  }
+}
+
+// 键盘 ESC 关闭预览
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    document.getElementById('preview-overlay').style.display = 'none';
+  }
+});
+
+console.log('ALOCS-1688 更新历史页面 · 花叔Design 高保真原型');
+console.log('设计哲学：Pentagram 信息建筑派 — 克制、层级清晰、排版驱动');
+console.log('品牌渐变：#667eea → #764ba2');
+</script>
+</body>
+</html>
