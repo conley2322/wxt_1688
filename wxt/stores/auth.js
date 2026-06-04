@@ -49,21 +49,23 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const baseUrl = server.startsWith('http') ? server : `http://${server}`
-      const res = await fetch(`${baseUrl}/api/v1/users/login`, {
+      
+      // 通过 background 代理请求（绕过混合内容限制）
+      const response = await browser.runtime.sendMessage({
+        type: 'api-request',
+        url: `${baseUrl}/api/v1/users/login`,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: user, password }),
       })
 
-      const data = await res.json()
-
-      if (!res.ok || data.code !== 200) {
-        throw new Error(data.message || '登录失败')
+      if (!response?.ok || response.data?.code !== 200) {
+        throw new Error(response?.data?.message || '登录失败')
       }
 
       serverAddress.value = baseUrl
-      username.value = data.data.user.username
-      token.value = data.data.token
+      username.value = response.data.data.user.username
+      token.value = response.data.data.token
       isLoggedIn.value = true
 
       await saveToStorage()
@@ -101,8 +103,17 @@ export const useAuthStore = defineStore('auth', () => {
     if (token.value) {
       headers['Authorization'] = `Bearer ${token.value}`
     }
-    const res = await fetch(url, { ...options, headers })
-    return res.json()
+    
+    // 通过 background 代理请求（绕过混合内容限制）
+    const response = await browser.runtime.sendMessage({
+      type: 'api-request',
+      url,
+      method: options.method || 'GET',
+      headers,
+      body: options.body,
+    })
+    
+    return response?.data || {}
   }
 
   return {

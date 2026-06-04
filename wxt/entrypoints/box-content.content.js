@@ -94,7 +94,10 @@ export default defineContentScript({
         const stored = await browser.storage.local.get(['token', 'serverAddress'])
         if (!stored.token) return
 
-        const res = await fetch(`${stored.serverAddress}/api/v1/products/batch_info`, {
+        // 通过 background 代理请求（绕过混合内容限制）
+        const response = await browser.runtime.sendMessage({
+          type: 'api-request',
+          url: `${stored.serverAddress}/api/v1/products/batch_info`,
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -102,10 +105,10 @@ export default defineContentScript({
           },
           body: JSON.stringify({ offer_ids: [...offerIds] })
         })
-        const json = await res.json()
-        if (json.code === 200) {
-          Object.assign(batchCache, json.data)
-          const count = Object.keys(json.data).length
+
+        if (response?.ok && response.data?.code === 200) {
+          Object.assign(batchCache, response.data.data)
+          const count = Object.keys(response.data.data).length
           if (count > 0) showToast(`已加载 ${count} 个商品数据`)
         }
       } catch (e) {

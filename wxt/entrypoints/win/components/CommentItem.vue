@@ -51,9 +51,19 @@ onMounted(async () => {
     let match
     while ((match = imgRegex.exec(html)) !== null) {
       try {
-        const res = await fetch(match[1])
-        const blob = await res.blob()
-        result = result.replace(match[1], URL.createObjectURL(blob))
+        // 通过 background 代理获取图片（绕过混合内容限制）
+        const stored = await browser.storage.local.get('serverAddress')
+        const fullUrl = match[1].startsWith('http') ? match[1] : `${stored.serverAddress}${match[1]}`
+        
+        const imgResponse = await browser.runtime.sendMessage({
+          type: 'api-request',
+          url: fullUrl,
+          method: 'GET'
+        })
+        
+        // 获取图片 blob（background 返回的是响应数据，需要特殊处理）
+        // 直接使用服务器 URL，由 background 代理加载
+        result = result.replace(match[1], fullUrl)
       } catch {}
     }
     resolvedHtml.value = result

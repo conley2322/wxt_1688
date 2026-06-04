@@ -16,7 +16,7 @@ export const authenticate = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET)
     req.user = { id: String(decoded.id), username: decoded.username, role: decoded.role || 'user' }
-    console.log('[auth] 用户:', req.user)
+   // console.log('[auth] 用户:', req.user)
     next()
   } catch (err) {
     return res.status(401).json({ code: 401, message: '令牌无效或已过期' })

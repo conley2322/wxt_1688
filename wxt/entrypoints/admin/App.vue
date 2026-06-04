@@ -49,7 +49,7 @@ onMounted(async () => {
             <circle cx="16" cy="16" r="3" fill="#c9975c" opacity="0.3"/>
           </svg>
         </span>
-        <span class="brand-text">1688 助手</span>
+        <span class="brand-text">ALOCS-1688</span>
       </div>
       <el-menu-item v-for="item in navItems" :key="item.path" :index="item.path">
         <el-icon><component :is="item.icon" /></el-icon>

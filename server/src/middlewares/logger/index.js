@@ -3,7 +3,7 @@ import crypto from 'crypto'
 
 export const logger = (req, res, next) => {
     const now = new Date().toISOString()
-    console.log(`日志中间件：${now} ${req.method} ${req.path}`)
+   // console.log(`日志中间件：${now} ${req.method} ${req.path}`)
 
     // 写入 operation_logs 表
     try {

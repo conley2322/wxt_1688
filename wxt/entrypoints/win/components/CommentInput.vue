@@ -123,27 +123,33 @@ onMounted(async () => {
                 console.log('[CommentInput upload] serverAddress:', stored.serverAddress)
                 if (!stored.token) { console.log('[CommentInput upload] 无 token, fallback base64'); insertFn(e.target.result, file.name); return }
                 const uploadUrl = `${stored.serverAddress}/api/v1/upload/image`
-                console.log('[CommentInput upload] POST:', uploadUrl)
-                const res = await fetch(uploadUrl, {
+                console.log('[CommentInput upload] POST via background:', uploadUrl)
+                
+                // 通过 background 代理请求（绕过混合内容限制）
+                const response = await browser.runtime.sendMessage({
+                  type: 'api-request',
+                  url: uploadUrl,
                   method: 'POST',
                   headers: { 'Authorization': `Bearer ${stored.token}`, 'Content-Type': 'application/json' },
                   body: JSON.stringify({ image: e.target.result, fileName: file.name })
                 })
-                const data = await res.json()
-                console.log('[CommentInput upload] 响应:', data)
-                if (data.code === 200 && data.data?.url) {
-                  const fullUrl = stored.serverAddress + data.data.url
+
+                console.log('[CommentInput upload] 响应:', response)
+                if (response?.ok && response.data?.code === 200 && response.data.data?.url) {
+                  const fullUrl = stored.serverAddress + response.data.data.url
                   console.log('[CommentInput upload] 服务器 URL:', fullUrl)
-                  // 立即 fetch 转 blob URL，绕过 HTTPS 混合内容限制
                   try {
-                    const imgRes = await fetch(fullUrl)
-                    const blob = await imgRes.blob()
-                    const blobUrl = URL.createObjectURL(blob)
-                    urlMap.set(blobUrl, fullUrl)
-                    console.log('[CommentInput upload] blobUrl:', blobUrl.substring(0, 50), '→', fullUrl)
-                    insertFn(blobUrl, file.name)
+                    // 通过 background 代理 fetch 图片
+                    const imgResponse = await browser.runtime.sendMessage({
+                      type: 'api-request',
+                      url: fullUrl,
+                      method: 'GET'
+                    })
+                    // 直接使用服务器 URL，background 已绕过限制
+                    urlMap.set(fullUrl, fullUrl)
+                    insertFn(fullUrl, file.name)
                   } catch (err) {
-                    console.error('[CommentInput upload] blob 转换失败:', err)
+                    console.error('[CommentInput upload] 图片获取失败:', err)
                     insertFn(fullUrl, file.name)
                   }
                 } else {
