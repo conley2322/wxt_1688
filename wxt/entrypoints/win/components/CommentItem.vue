@@ -49,34 +49,46 @@ onMounted(async () => {
     let result = html
     const imgRegex = /src="([^"]*\/uploads\/[^"]*)"/g
     let match
+    const replacements = []
     
-    // 收集所有图片 URL
-    const promises = []
+    // 收集所有需要替换的图片 URL
     while ((match = imgRegex.exec(html)) !== null) {
       const stored = await browser.storage.local.get('serverAddress')
-      const fullUrl = match[1].startsWith('http') ? match[1] : `${stored.serverAddress}${match[1]}`
-      
-      promises.push((async () => {
-        try {
-          // 通过 background 代理获取图片，返回 base64 数据
-          const imgResponse = await browser.runtime.sendMessage({
-            type: 'api-request',
-            url: fullUrl,
-            method: 'GET',
-            responseType: 'blob'
-          })
-          
-          if (imgResponse.ok && imgResponse.data) {
-            // 使用 base64 URL 替换原 URL，避免混合内容限制
-            result = result.replace(match[1], imgResponse.data)
-          }
-        } catch (e) {
-          console.error('[CommentItem] 图片加载失败:', e)
-        }
-      })())
+      const originalUrl = match[1]
+      const fullUrl = originalUrl.startsWith('http') ? originalUrl : `${stored.serverAddress}${originalUrl}`
+      replacements.push({ originalUrl, fullUrl })
     }
     
-    await Promise.all(promises)
+    // 并行获取所有图片
+    const promises = replacements.map(async (item) => {
+      try {
+        // 通过 background 代理获取图片，返回 base64 数据
+        const imgResponse = await browser.runtime.sendMessage({
+          type: 'api-request',
+          url: item.fullUrl,
+          method: 'GET',
+          responseType: 'blob'
+        })
+        
+        if (imgResponse.ok && imgResponse.data) {
+          return { original: item.originalUrl, base64: imgResponse.data }
+        }
+      } catch (e) {
+        console.error('[CommentItem] 图片加载失败:', e)
+      }
+      return null
+    })
+    
+    // 等待所有图片获取完成
+    const results = await Promise.all(promises)
+    
+    // 统一替换所有图片 URL
+    results.forEach((r) => {
+      if (r) {
+        result = result.replace(r.original, r.base64)
+      }
+    })
+    
     resolvedHtml.value = result
   }
 
