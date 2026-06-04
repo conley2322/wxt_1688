@@ -3,11 +3,22 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type !== 'api-request') return false
 
-    const { url, method, headers, body } = message
+    const { url, method, headers, body, responseType = 'json' } = message
+    
     fetch(url, { method, headers, body })
       .then(async (res) => {
-        const data = await res.json()
-        sendResponse({ ok: res.ok, status: res.status, data })
+        if (responseType === 'blob') {
+          // 处理图片等二进制数据
+          const blob = await res.blob()
+          const reader = new FileReader()
+          reader.onloadend = () => {
+            sendResponse({ ok: res.ok, status: res.status, data: reader.result })
+          }
+          reader.readAsDataURL(blob)
+        } else {
+          const data = await res.json()
+          sendResponse({ ok: res.ok, status: res.status, data })
+        }
       })
       .catch((err) => {
         sendResponse({ ok: false, status: 0, data: null, error: err.message })

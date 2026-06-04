@@ -3,7 +3,7 @@ import { Router } from 'express'
 const router = Router()
 
 router.get('/', (req, res) => {
-    console.log(req.query.offer_id)
+    //console.log(req.query.offer_id)
     try {
         const offerId = req.query.offer_id
 
@@ -50,7 +50,7 @@ router.get('/', (req, res) => {
              WHERE pt.offer_id = ? AND pt.tag_user = ?`,
             [offerId, req.user.id]
         )
-        console.log(mytags)
+        //console.log(mytags)
 
 
 

@@ -6,8 +6,8 @@ router.post('/', (req, res) => {
   try {
     const { offer_ids } = req.body
     const user_id = req.user.id
-    console.log(user_id)
-    console.log(offer_ids)
+   //console.log(user_id)
+   //console.log(offer_idßs)
     
     if (!offer_ids || !Array.isArray(offer_ids) || offer_ids.length === 0) {
       return res.status(400).json({ code: 400, message: '缺少 offer_ids' })

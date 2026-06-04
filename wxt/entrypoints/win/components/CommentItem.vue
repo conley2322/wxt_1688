@@ -49,23 +49,34 @@ onMounted(async () => {
     let result = html
     const imgRegex = /src="([^"]*\/uploads\/[^"]*)"/g
     let match
+    
+    // 收集所有图片 URL
+    const promises = []
     while ((match = imgRegex.exec(html)) !== null) {
-      try {
-        // 通过 background 代理获取图片（绕过混合内容限制）
-        const stored = await browser.storage.local.get('serverAddress')
-        const fullUrl = match[1].startsWith('http') ? match[1] : `${stored.serverAddress}${match[1]}`
-        
-        const imgResponse = await browser.runtime.sendMessage({
-          type: 'api-request',
-          url: fullUrl,
-          method: 'GET'
-        })
-        
-        // 获取图片 blob（background 返回的是响应数据，需要特殊处理）
-        // 直接使用服务器 URL，由 background 代理加载
-        result = result.replace(match[1], fullUrl)
-      } catch {}
+      const stored = await browser.storage.local.get('serverAddress')
+      const fullUrl = match[1].startsWith('http') ? match[1] : `${stored.serverAddress}${match[1]}`
+      
+      promises.push((async () => {
+        try {
+          // 通过 background 代理获取图片，返回 base64 数据
+          const imgResponse = await browser.runtime.sendMessage({
+            type: 'api-request',
+            url: fullUrl,
+            method: 'GET',
+            responseType: 'blob'
+          })
+          
+          if (imgResponse.ok && imgResponse.data) {
+            // 使用 base64 URL 替换原 URL，避免混合内容限制
+            result = result.replace(match[1], imgResponse.data)
+          }
+        } catch (e) {
+          console.error('[CommentItem] 图片加载失败:', e)
+        }
+      })())
     }
+    
+    await Promise.all(promises)
     resolvedHtml.value = result
   }
 
@@ -149,5 +160,5 @@ const timeAgo = computed(() => {
 
 <style>
 .viewer-container { z-index: 2147483647 !important; }
-.viewer-toolbar { z-index: 2147483648 !important; }
+.viewer-toolbar { z-index: 2147483647 !important; }
 </style>
