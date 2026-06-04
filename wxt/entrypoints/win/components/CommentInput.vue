@@ -139,18 +139,24 @@ onMounted(async () => {
                   const fullUrl = stored.serverAddress + response.data.data.url
                   console.log('[CommentInput upload] 服务器 URL:', fullUrl)
                   try {
-                    // 通过 background 代理 fetch 图片
+                    // 通过 background 代理获取图片，返回 base64（避免混合内容限制）
                     const imgResponse = await browser.runtime.sendMessage({
                       type: 'api-request',
                       url: fullUrl,
-                      method: 'GET'
+                      method: 'GET',
+                      responseType: 'blob'
                     })
-                    // 直接使用服务器 URL，background 已绕过限制
-                    urlMap.set(fullUrl, fullUrl)
-                    insertFn(fullUrl, file.name)
+                    if (imgResponse.ok && imgResponse.data) {
+                      // 使用 base64 URL 插入编辑器，避免混合内容限制
+                      urlMap.set(imgResponse.data, fullUrl)
+                      insertFn(imgResponse.data, file.name)
+                    } else {
+                      console.error('[CommentInput upload] 图片获取失败')
+                      insertFn(e.target.result, file.name)
+                    }
                   } catch (err) {
                     console.error('[CommentInput upload] 图片获取失败:', err)
-                    insertFn(fullUrl, file.name)
+                    insertFn(e.target.result, file.name)
                   }
                 } else {
                   console.log('[CommentInput upload] 上传失败, fallback base64')
