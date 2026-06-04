@@ -1,9 +1,11 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAppStore } from '@/stores/app.js'
 
 const route = useRoute()
 const router = useRouter()
+const appStore = useAppStore()
 const showContent = ref(false)
 const isAdmin = ref(false)
 
@@ -20,6 +22,14 @@ const navItems = computed(() => allNavItems.filter(item => !item.adminOnly || is
 
 onMounted(async () => {
   console.log('[Admin] 挂载, 路由:', route.path)
+  // 初始化应用 Store（版本号、设置等）
+  await appStore.init()
+  if (appStore.config.settings.autoCheckUpdate) {
+    appStore.checkUpdate()
+  }
+  if (appStore.config.update.hasUpdate) {
+    console.log(`[App] 发现新版本: ${appStore.config.update.latestVersion}`)
+  }
   // 检查当前用户角色
   try {
     const stored = await browser.storage.local.get(['token', 'serverAddress', 'username'])
@@ -46,7 +56,7 @@ onMounted(async () => {
         <span class="brand-icon">
           <img src="/logo.svg" alt="Logo" width="24" height="24" />
         </span>
-        <span class="brand-text">ALOCS-1688</span>
+        <span class="brand-text">{{ appStore.config.app.name }}</span>
       </div>
       <el-menu-item v-for="item in navItems" :key="item.path" :index="item.path">
         <el-icon><component :is="item.icon" /></el-icon>

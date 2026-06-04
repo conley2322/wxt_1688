@@ -139,4 +139,27 @@ router.delete('/:id', async (req, res) => {
   }
 })
 
+// 获取最新版本号（供扩展端检查更新）
+router.get('/latest-version', async (req, res) => {
+  try {
+    const latest = await req.db.get(`
+      SELECT version, title, created_at FROM product_updates
+      WHERE status = 'published'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `)
+    res.json({
+      code: 200,
+      data: latest || null,
+      message: '获取成功'
+    })
+  } catch (error) {
+    res.status(500).json({
+      code: 500,
+      message: '获取失败',
+      error: error.message
+    })
+  }
+})
+
 export default router

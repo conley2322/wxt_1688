@@ -2,14 +2,16 @@
 import { ref, onMounted } from 'vue'
 import { Calendar } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
+import { useAppStore } from '@/stores/app.js'
 import { api } from './useApi.js'
 import UpdateTimeline from './UpdateTimeline.vue'
 
 const router = useRouter()
+const appStore = useAppStore()
 const isAdmin = ref(false)
 
-const version = '1.0.0'
-const productName = 'ALOCS-1688 采购助手'
+const version = appStore.config.app.version
+const productName = appStore.config.app.name
 const producer = 'Conley'
 
 const updates = ref([
@@ -91,7 +93,9 @@ onMounted(async () => {
         <span class="section-badge">{{ updates.length }} 条记录</span>
       </div>
       <button v-if="isAdmin" class="btn-primary" @click="router.push('/updates/publish')">
-        <span>+</span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
         发布更新
       </button>
     </div>
@@ -101,7 +105,8 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-:root {
+/* CSS 变量作用域放到组件根节点，scoped 下 :root 不生效 */
+.app-section {
   --brand-color: #3b82f6;
   --brand-hover: #2563eb;
   --brand-subtle: rgba(59,130,246,0.08);
@@ -217,23 +222,29 @@ onMounted(async () => {
 .btn-primary {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 9px 18px;
+  gap: 7px;
+  padding: 8px 16px;
   font-size: 13px;
   font-weight: 600;
   color: #fff;
   background: var(--brand-color);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 150ms ease;
+  transition: background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
   font-family: inherit;
-  box-shadow: 0 2px 8px rgba(59,130,246,0.25);
+  box-shadow: 0 1px 3px rgba(59,130,246,0.3), 0 4px 12px rgba(59,130,246,0.2);
+  letter-spacing: 0.1px;
 }
 
 .btn-primary:hover {
-  transform: translateY(-1px);
   background: var(--brand-hover);
-  box-shadow: 0 4px 14px rgba(59,130,246,0.35);
+  box-shadow: 0 2px 6px rgba(59,130,246,0.35), 0 6px 18px rgba(59,130,246,0.28);
+  transform: translateY(-1px);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 3px rgba(59,130,246,0.3);
 }
 </style>

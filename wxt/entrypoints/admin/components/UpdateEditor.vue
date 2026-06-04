@@ -1,23 +1,37 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowLeft, DocumentAdd, View, Clock } from '@element-plus/icons-vue'
+import { useAppStore } from '@/stores/app.js'
 import { api } from './useApi.js'
+
+const router = useRouter()
+const appStore = useAppStore()
 
 const version = ref('')
 const title = ref('')
 const content = ref('')
 const showPreview = ref(false)
 const previewContent = ref('')
+const saving = ref(false)
+const publishing = ref(false)
+
+function goBack() {
+  router.push('/updates')
+}
 
 async function saveDraft() {
   if (!version.value || !title.value) {
-    alert('请填写版本号和标题')
+    ElMessage.warning('请填写版本号和标题')
     return
   }
   if (!content.value.trim()) {
-    alert('请填写更新内容')
+    ElMessage.warning('请填写更新内容')
     return
   }
 
+  saving.value = true
   try {
     const res = await api('/api/v1/updates', 'POST', {
       version: version.value,
@@ -26,26 +40,38 @@ async function saveDraft() {
       status: 'draft'
     })
     if (res.code === 200) {
-      alert('草稿保存成功')
+      ElMessage.success('草稿保存成功')
       resetForm()
     }
   } catch (e) {
     console.error('保存失败:', e)
-    alert('保存失败')
+    ElMessage.error('保存失败')
+  } finally {
+    saving.value = false
   }
 }
 
 async function publish() {
   if (!version.value || !title.value) {
-    alert('请填写版本号和标题')
+    ElMessage.warning('请填写版本号和标题')
     return
   }
   if (!content.value.trim()) {
-    alert('请填写更新内容')
+    ElMessage.warning('请填写更新内容')
     return
   }
-  if (!confirm('确定发布这条更新吗？')) return
 
+  try {
+    await ElMessageBox.confirm('确定发布这条更新吗？发布后将显示在用户端。', '确认发布', {
+      confirmButtonText: '确认发布',
+      cancelButtonText: '取消',
+      type: 'info'
+    })
+  } catch {
+    return
+  }
+
+  publishing.value = true
   try {
     const res = await api('/api/v1/updates', 'POST', {
       version: version.value,
@@ -54,12 +80,14 @@ async function publish() {
       status: 'published'
     })
     if (res.code === 200) {
-      alert('发布成功')
-      resetForm()
+      ElMessage.success('发布成功！')
+      router.push('/updates')
     }
   } catch (e) {
     console.error('发布失败:', e)
-    alert('发布失败')
+    ElMessage.error('发布失败')
+  } finally {
+    publishing.value = false
   }
 }
 
@@ -71,6 +99,10 @@ function formatContent(text) {
 }
 
 function preview() {
+  if (!content.value.trim()) {
+    ElMessage.warning('请先填写更新内容')
+    return
+  }
   previewContent.value = formatContent(content.value)
   showPreview.value = true
 }
@@ -83,408 +115,351 @@ function resetForm() {
 </script>
 
 <template>
-  <section class="app-section">
+  <section class="publish-section">
+    <!-- 顶部返回栏 -->
+    <div class="page-topbar">
+      <el-button text @click="goBack">
+        <el-icon><ArrowLeft /></el-icon>
+        返回更新日志
+      </el-button>
+    </div>
+
     <!-- 产品信息卡片 -->
-    <div class="product-card">
-      <div class="product-card-logo">
-        <img src="/logo.svg" alt="Logo" width="40" height="40" />
-      </div>
-      <div class="product-card-info">
-        <div class="product-card-name">ALOCS-1688 采购助手</div>
-        <div class="product-card-meta">
-          <span>发布新的版本更新</span>
+    <el-card class="product-card" shadow="hover">
+      <div class="product-card-inner">
+        <div class="logo-wrap">
+          <img src="/logo.svg" alt="Logo" width="36" height="36" />
+        </div>
+        <div class="product-info">
+          <div class="product-name">{{ appStore.config.app.name }}</div>
+          <div class="product-sub">发布新的版本更新</div>
         </div>
       </div>
-    </div>
+    </el-card>
 
-    <!-- 编辑器布局 -->
-    <div class="editor-layout">
-      <!-- 左侧表单 -->
-      <div class="editor-sidebar">
-        <div class="editor-sidebar-title">版本信息</div>
-
-        <div class="form-group">
-          <label class="form-label">版本号</label>
-          <input class="form-input" v-model="version" type="text" placeholder="例如：1.0.0" />
+    <!-- 编辑器卡片 -->
+    <el-card class="editor-card" shadow="hover">
+      <!-- 卡片头部 -->
+      <template #header>
+        <div class="card-header">
+          <el-icon :size="18" color="#6366f1"><DocumentAdd /></el-icon>
+          <span>新建更新公告</span>
         </div>
+      </template>
 
-        <div class="form-group">
-          <label class="form-label">更新标题</label>
-          <input class="form-input" v-model="title" type="text" placeholder="例如：正式发布" />
-        </div>
+      <!-- el-row 双栏 -->
+      <el-row :gutter="24">
+        <!-- 左侧：版本信息 -->
+        <el-col :span="8">
+          <div class="left-panel">
+            <div class="panel-title">版本信息</div>
 
-        <div class="form-group">
-          <label class="form-label">状态</label>
-          <div class="form-hint">
-            <span class="hint-dot published"></span>
-            <span>发布后可见于用户端</span>
+            <el-form label-position="top" :model="{ version, title }">
+              <el-form-item label="版本号">
+                <el-input
+                  v-model="version"
+                  placeholder="例如：1.0.0"
+                  size="large"
+                  clearable
+                />
+              </el-form-item>
+
+              <el-form-item label="更新标题">
+                <el-input
+                  v-model="title"
+                  placeholder="例如：正式发布"
+                  size="large"
+                  clearable
+                />
+              </el-form-item>
+
+              <el-form-item label="发布状态">
+                <div class="status-hint">
+                  <span class="status-dot"></span>
+                  <span>发布后所有人可见</span>
+                </div>
+              </el-form-item>
+            </el-form>
           </div>
-        </div>
-      </div>
+        </el-col>
 
-      <!-- 右侧内容区 -->
-      <div class="editor-main">
-        <div class="editor-header">
-          <span class="editor-label">更新内容</span>
-          <span class="editor-hint">每行一条更新记录</span>
-        </div>
-        
-        <textarea 
-          class="editor-textarea"
-          v-model="content" 
-          placeholder="请输入更新内容，每行一条..."
-          rows="12"
-        ></textarea>
+        <!-- 右侧：内容编辑 -->
+        <el-col :span="16">
+          <div class="right-panel">
+            <div class="panel-title">
+              更新内容
+              <span class="panel-hint">每行一条更新记录</span>
+            </div>
 
-        <div class="editor-actions">
-          <button class="btn-sm" @click="saveDraft">保存草稿</button>
-          <button class="btn-sm" @click="preview">预览</button>
-          <button class="btn-sm primary" @click="publish">发布</button>
-        </div>
-      </div>
-    </div>
+            <el-input
+              v-model="content"
+              type="textarea"
+              placeholder="请输入更新内容，每行一条…&#10;&#10;例如：&#10;新增商品管理瀑布流视图&#10;支持评论图片点击放大查看&#10;优化搜索筛选功能&#10;修复若干已知问题"
+              :rows="14"
+              :autosize="{ minRows: 14, maxRows: 22 }"
+              resize="vertical"
+            />
+
+            <!-- 操作按钮 -->
+            <div class="action-bar">
+              <div class="action-bar-left">
+                <el-button size="default" @click="saveDraft" :loading="saving">
+                  <el-icon><Clock /></el-icon>
+                  保存草稿
+                </el-button>
+                <el-button size="default" @click="preview">
+                  <el-icon><View /></el-icon>
+                  预览
+                </el-button>
+              </div>
+              <el-button class="publish-btn" type="primary" size="default" @click="publish" :loading="publishing">
+                <span v-if="!publishing">🚀</span>
+                发布
+              </el-button>
+            </div>
+          </div>
+        </el-col>
+      </el-row>
+    </el-card>
 
     <!-- 预览弹窗 -->
-    <div v-if="showPreview" class="preview-overlay" @click="showPreview = false">
-      <div class="preview-panel" @click.stop>
-        <h3>预览</h3>
-        <div class="preview-version-label">v{{ version }} {{ title }}</div>
-        <div class="preview-content" v-html="previewContent"></div>
-        <div class="preview-close">
-          <button class="btn-sm primary" @click="showPreview = false">关闭预览</button>
-        </div>
+    <el-dialog
+      v-model="showPreview"
+      title="预览效果"
+      width="520px"
+      :close-on-click-modal="true"
+      destroy-on-close
+    >
+      <div class="preview-block">
+        <div class="preview-label">v{{ version }} {{ title }}</div>
+        <div class="preview-body" v-html="previewContent"></div>
       </div>
-    </div>
+      <template #footer>
+        <el-button type="primary" @click="showPreview = false">关闭预览</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
 <style scoped>
-:root {
-  --brand-color: #3b82f6;
-  --brand-hover: #2563eb;
-  --brand-subtle: rgba(59,130,246,0.08);
-  --ink-primary: #1f2937;
-  --ink-secondary: #4b5563;
-  --ink-tertiary: #9ca3af;
-  --surface-bg: #f9fafb;
-  --surface-card: #ffffff;
-  --border-light: #e5e7eb;
-  --border-medium: #d1d5db;
-  --green: #10b981;
-  --green-bg: #d1fae5;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.03), 0 1px 3px rgba(0,0,0,0.04);
-  --shadow-md: 0 4px 10px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.05);
-}
-
-.app-section {
-  max-width: 900px;
+/* ── 页面容器 ── */
+.publish-section {
+  max-width: 960px;
   margin: 0 auto;
-  padding: 32px 24px 64px;
+  padding: 0 0 48px;
 }
 
+/* ── 顶部返回栏 ── */
+.page-topbar {
+  margin-bottom: 16px;
+}
+
+/* ── 产品卡片 ── */
 .product-card {
-  background: var(--surface-card);
-  border-radius: var(--radius-lg);
-  padding: 24px 28px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
+  border: none;
+  border-radius: 10px;
+}
+
+.product-card :deep(.el-card__body) {
+  padding: 18px 24px;
+}
+
+.product-card-inner {
   display: flex;
   align-items: center;
-  gap: 20px;
-  box-shadow: var(--shadow-md);
-  border: 1px solid var(--border-light);
+  gap: 16px;
 }
 
-.product-card-logo {
-  width: 56px;
-  height: 56px;
-  background: var(--brand-subtle);
-  border-radius: var(--radius-md);
+.logo-wrap {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1, #818cf8);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
 
-.product-card-logo img {
-  opacity: 0.85;
+.logo-wrap img {
+  filter: brightness(0) invert(1);
+  opacity: 0.95;
 }
 
-.product-card-info {
-  flex: 1;
-}
-
-.product-card-name {
-  font-size: 20px;
+.product-name {
+  font-size: 16px;
   font-weight: 700;
-  color: var(--ink-primary);
-  margin-bottom: 4px;
-  letter-spacing: -0.2px;
+  color: #1e293b;
 }
 
-.product-card-meta {
+.product-sub {
   font-size: 13px;
-  color: var(--ink-tertiary);
+  color: #94a3b8;
+  margin-top: 2px;
 }
 
-.editor-layout {
-  display: grid;
-  grid-template-columns: 260px 1fr;
-  gap: 18px;
-  align-items: start;
+/* ── 编辑器卡片 ── */
+.editor-card {
+  border-radius: 10px;
+  border: none;
 }
 
-.editor-sidebar {
-  background: var(--surface-card);
-  border-radius: var(--radius-md);
-  padding: 20px;
-  box-shadow: var(--shadow-sm);
-  border: 1px solid var(--border-light);
-  position: sticky;
-  top: 24px;
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e293b;
 }
 
-.editor-sidebar-title {
+/* ── 左侧面板 ── */
+.left-panel {
+  padding-right: 4px;
+}
+
+.left-panel .panel-title {
   font-size: 12px;
   font-weight: 700;
-  color: var(--ink-tertiary);
+  color: #94a3b8;
   text-transform: uppercase;
   letter-spacing: 0.8px;
   margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e8f0;
 }
 
-.form-group {
-  margin-bottom: 16px;
+/* ── 右侧面板 ── */
+.right-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
-.form-group:last-child {
-  margin-bottom: 0;
-}
-
-.form-label {
-  display: block;
+.right-panel .panel-title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--ink-secondary);
-  margin-bottom: 6px;
-}
-
-.form-input {
-  width: 100%;
-  padding: 8px 12px;
-  font-size: 13px;
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  color: var(--ink-primary);
-  transition: border-color 150ms ease, box-shadow 150ms ease;
-  background: var(--surface-bg);
-  outline: none;
-}
-
-.form-input:focus {
-  border-color: var(--brand-color);
-  box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
-  background: var(--surface-card);
-}
-
-.form-input::placeholder {
-  color: var(--ink-tertiary);
-}
-
-.form-hint {
-  font-size: 12px;
-  color: var(--ink-tertiary);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.hint-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-
-.hint-dot.published {
-  background: var(--green);
-}
-
-.editor-main {
-  background: var(--surface-card);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
-  border: 1px solid var(--border-light);
-  padding: 20px;
-}
-
-.editor-header {
+  color: #475569;
+  margin-bottom: 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
 }
 
-.editor-label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-secondary);
-}
-
-.editor-hint {
+.panel-hint {
   font-size: 12px;
-  color: var(--ink-tertiary);
+  font-weight: 400;
+  color: #94a3b8;
 }
 
-.editor-textarea {
-  width: 100%;
-  padding: 12px;
+/* ── textarea 微调 ── */
+.right-panel :deep(.el-textarea__inner) {
   font-size: 13px;
-  border: 1px solid var(--border-medium);
-  border-radius: var(--radius-sm);
+  line-height: 1.8;
   font-family: inherit;
-  color: var(--ink-primary);
-  background: var(--surface-bg);
-  resize: vertical;
-  outline: none;
-  transition: border-color 150ms ease, box-shadow 150ms ease;
-  line-height: 1.6;
 }
 
-.editor-textarea:focus {
-  border-color: var(--brand-color);
-  box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
-  background: var(--surface-card);
+/* ── 状态提示 ── */
+.status-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #15803d;
+  font-weight: 500;
+  width: 100%;
 }
 
-.editor-textarea::placeholder {
-  color: var(--ink-tertiary);
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3px rgba(34,197,94,0.2);
 }
 
-.editor-actions {
+/* ── 操作栏 ── */
+.action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.action-bar-left {
   display: flex;
   gap: 8px;
-  justify-content: flex-end;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-light);
 }
 
-.btn-sm {
-  padding: 7px 16px;
-  font-size: 13px;
-  font-weight: 600;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  border: 1px solid var(--border-medium);
-  background: var(--surface-card);
-  color: var(--ink-secondary);
-  font-family: inherit;
-  transition: all 150ms ease;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+/* 发布按钮增强 */
+.publish-btn {
+  padding: 0 22px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.2px;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.3), 0 4px 16px rgba(99,102,241,0.15) !important;
+  transition: box-shadow 150ms ease, transform 150ms ease !important;
 }
 
-.btn-sm:hover {
-  border-color: var(--brand-color);
-  color: var(--brand-color);
-}
-
-.btn-sm.primary {
-  background: var(--brand-color);
-  color: #fff;
-  border: none;
-  box-shadow: 0 2px 8px rgba(59,130,246,0.25);
-}
-
-.btn-sm.primary:hover {
-  background: var(--brand-hover);
-  box-shadow: 0 3px 12px rgba(59,130,246,0.35);
+.publish-btn:hover {
   transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99,102,241,0.4), 0 6px 20px rgba(99,102,241,0.2) !important;
 }
 
-.preview-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  backdrop-filter: blur(4px);
+/* ── 预览弹窗内容 ── */
+.preview-block {
+  padding: 0 4px;
 }
 
-.preview-panel {
-  background: var(--surface-card);
-  border-radius: var(--radius-lg);
-  padding: 24px;
-  width: 500px;
-  max-height: 80vh;
-  overflow-y: auto;
-  box-shadow: var(--shadow-md);
-}
-
-.preview-panel h3 {
+.preview-label {
   font-size: 16px;
   font-weight: 700;
-  color: var(--ink-primary);
+  color: #6366f1;
   margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e2e8f0;
 }
 
-.preview-version-label {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--brand-color);
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-light);
-}
-
-.preview-content {
+.preview-body {
   font-size: 14px;
-  color: var(--ink-secondary);
-  line-height: 1.8;
+  color: #475569;
+  line-height: 1.9;
 }
 
-.preview-content ul {
+.preview-body :deep(ul) {
   list-style: none;
   padding: 0;
+  margin: 0;
 }
 
-.preview-content li {
+.preview-body :deep(li) {
   position: relative;
-  padding-left: 16px;
-  margin-bottom: 6px;
+  padding: 5px 0 5px 20px;
 }
 
-.preview-content li::before {
+.preview-body :deep(li::before) {
   content: '';
   position: absolute;
-  left: 0;
-  top: 10px;
+  left: 4px;
+  top: 14px;
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--border-medium);
+  background: #6366f1;
+  opacity: 0.35;
 }
 
-.preview-close {
-  margin-top: 20px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-@media (max-width: 700px) {
-  .editor-layout {
-    grid-template-columns: 1fr;
-  }
-  
-  .product-card {
-    flex-direction: column;
-    text-align: center;
+/* ── 响应式 ── */
+@media (max-width: 768px) {
+  .el-row {
+    display: block;
   }
 }
 </style>

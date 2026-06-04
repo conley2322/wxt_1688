@@ -71,9 +71,9 @@ export default defineContentScript({
     let lastRequestFingerprint = ''
     let requestTimer = null
 
-    async function loadBatchData() {
-      // 从所有配置中收集卡片
-      const allCards = renderConfigs.flatMap(cfg =>
+    async function loadBatchData(configs) {
+      const cfgs = configs || renderConfigs
+      const allCards = cfgs.flatMap(cfg =>
         Array.from(document.querySelectorAll(`${cfg.parent} ${cfg.child}`))
       )
       const offerIds = new Set()
@@ -148,8 +148,27 @@ export default defineContentScript({
     const renderAll = async () => {
       const needLogin = await showLoginTip()
       if (needLogin) return
-      loadBatchData()
-      renderConfigs.forEach(cfg => render(cfg.parent, cfg.child))
+
+      // 读取渲染开关，动态构建配置
+      let cfgs = renderConfigs
+      try {
+        const stored = await browser.storage.local.get('appSettings')
+        console.log('[box] storage 完整读取:', JSON.stringify(stored))
+        const s = stored.appSettings || {}
+        console.log('[box] appSettings:', JSON.stringify(s))
+        cfgs = [
+          s.enableSearchList !== false ? renderConfigs[0] : null,
+          s.enableOfferList !== false ? renderConfigs[1] : null,
+          s.enableHomeRecommend !== false ? renderConfigs[2] : null,
+        ].filter(Boolean)
+        console.log('[box] 生效配置:', cfgs.map(c => c?.parent))
+      } catch (e) {
+        console.error('[box] 读取设置失败:', e)
+      }
+
+      if (cfgs.length === 0) return
+      loadBatchData(cfgs)
+      cfgs.forEach(cfg => render(cfg.parent, cfg.child))
     }
 
     renderAll()

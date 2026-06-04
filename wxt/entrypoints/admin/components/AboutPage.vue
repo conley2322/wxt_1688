@@ -1,10 +1,12 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { MoreFilled, Box, User, Calendar, Check, Message } from '@element-plus/icons-vue'
+import { useAppStore } from '@/stores/app.js'
 import { api } from './useApi.js'
 
-const version = '1.0.0'
-const productName = 'ALOCS-1688 采购助手'
+const appStore = useAppStore()
+const version = appStore.config.app.version
+const productName = appStore.config.app.name
 const producer = 'Conley'
 
 const updates = ref([])
