@@ -40,5 +40,6 @@ lerna-debug.log*
 
 # SSL Certificates
 server/*.pem
+server/.cert-info.json
 server/uploads/
 

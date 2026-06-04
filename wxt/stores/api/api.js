@@ -55,7 +55,7 @@ export const useApiStore = defineStore('api', () => {
   const supplierComments = ref([])
 
   // ══════════════════════════════════════
-  // AJAX 封装（带 401 处理）
+  // AJAX 封装（通过 background 代理，绕过混合内容限制）
   // ══════════════════════════════════════
   async function ajax(url, method, body) {
     const stored = await browser.storage.local.get(['token', 'username', 'serverAddress'])
@@ -64,27 +64,33 @@ export const useApiStore = defineStore('api', () => {
     }
 
     const fullUrl = stored.serverAddress + url
-    const options = {
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${stored.token}`
+    }
+
+    const response = await browser.runtime.sendMessage({
+      type: 'api-request',
+      url: fullUrl,
       method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${stored.token}`
-      }
-    }
-    if (body !== undefined) {
-      options.body = JSON.stringify(body)
-    }
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    })
 
-    const res = await fetch(fullUrl, options)
-
-    if (res.status === 401) {
+    if (!response) {
+      throw new Error('请求失败：无响应')
+    }
+    if (response.error) {
+      throw new Error(response.error)
+    }
+    if (response.status === 401) {
       alert('登录已过期，请重新登录')
       throw new Error('登录已过期')
     }
 
-    const data = await res.json()
-    if (data.code !== 200) {
-      throw new Error(data.message || '请求失败')
+    const data = response.data
+    if (response.status !== 200 || data?.code !== 200) {
+      throw new Error(data?.message || '请求失败')
     }
     return data
   }

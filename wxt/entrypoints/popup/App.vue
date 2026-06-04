@@ -31,19 +31,24 @@ async function handleLogin() {// 处理登录
   error.value = ''
 
   try {
-    const baseUrl = serverAddress.value.trim().startsWith('https')
+    const baseUrl = serverAddress.value.trim().startsWith('http')
       ? serverAddress.value.trim()
-      : `https://${serverAddress.value.trim()}`
+      : `http://${serverAddress.value.trim()}`
 
-    const res = await fetch(`${baseUrl}/api/v1/users/login`, {
+    const response = await browser.runtime.sendMessage({
+      type: 'api-request',
+      url: `${baseUrl}/api/v1/users/login`,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: formUsername.value, password: formPassword.value }),
     })
 
-    const data = await res.json()
+    if (!response || response.error) {
+      throw new Error(response?.error || '连接失败，请检查服务器地址')
+    }
 
-    if (!res.ok || data.code !== 200) {
+    const data = response.data
+    if (!response.ok || data.code !== 200) {
       throw new Error(data.message || '登录失败')
     }
 
@@ -126,7 +131,7 @@ onMounted(async () => {
             <label class="field-label" :class="{ 'has-value': serverAddress }">
               服务器地址
             </label>
-            <input v-model="serverAddress" type="text" class="field-input" placeholder="localhost:3001"
+            <input v-model="serverAddress" type="text" class="field-input" placeholder="192.168.x.x:3000"
               :disabled="loading" />
           </div>
 
