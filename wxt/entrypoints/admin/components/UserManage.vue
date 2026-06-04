@@ -4,6 +4,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from './useApi.js'
 
 const users = ref([])
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
 const dialogVisible = ref(false)
 const form = ref({ username: '', email: '', password: '', role: 'user' })
 
@@ -14,9 +17,16 @@ onMounted(async () => {
 
 async function loadUsers() {
   try {
-    const res = await api('/api/v1/users', 'GET')
+    const params = new URLSearchParams({
+      page: currentPage.value,
+      page_size: pageSize.value
+    })
+    const res = await api(`/api/v1/users?${params}`, 'GET')
     console.log('[UserManage] 用户列表:', res)
-    if (res.code === 200) users.value = res.data || res
+    if (res.code === 200) {
+      users.value = res.data || res
+      total.value = res.total || users.value.length
+    }
   } catch (e) { console.error('[UserManage] 加载失败:', e) }
 }
 
@@ -54,6 +64,17 @@ async function deleteUser(user) {
   } catch {}
 }
 
+function handlePageChange(page) {
+  currentPage.value = page
+  loadUsers()
+}
+
+function handleSizeChange(size) {
+  pageSize.value = size
+  currentPage.value = 1
+  loadUsers()
+}
+
 function statusType(s) { return s === 1 ? 'success' : 'danger' }
 </script>
 <template>
@@ -77,6 +98,18 @@ function statusType(s) { return s === 1 ? 'success' : 'danger' }
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="total > 0" class="pagination">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="total"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
+      <el-empty v-else description="暂无用户" />
     </el-card>
     <el-dialog v-model="dialogVisible" title="添加用户" width="420px">
       <el-form :model="form" label-width="70px">
@@ -92,4 +125,5 @@ function statusType(s) { return s === 1 ? 'success' : 'danger' }
 <style scoped>
 .page-title { font-size: 20px; font-weight: 600; color: #303133; margin: 0; }
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.pagination { display: flex; justify-content: center; padding: 16px 0; }
 </style>

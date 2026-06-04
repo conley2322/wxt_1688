@@ -43,11 +43,7 @@ onMounted(async () => {
     <el-menu :default-active="route.path" class="sidebar" @select="(path) => router.push(path)">
       <div class="sidebar-brand">
         <span class="brand-icon">
-          <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
-            <rect x="2" y="2" width="28" height="28" rx="8" stroke="#c9975c" stroke-width="1.5"/>
-            <path d="M10 16h12M16 10v12" stroke="#c9975c" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="16" cy="16" r="3" fill="#c9975c" opacity="0.3"/>
-          </svg>
+          <img src="/logo.svg" alt="Logo" width="24" height="24" />
         </span>
         <span class="brand-text">ALOCS-1688</span>
       </div>
@@ -68,6 +64,6 @@ onMounted(async () => {
 .sidebar { width: 200px; min-height: 100vh; position: fixed; top: 0; left: 0; }
 .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 20px 16px 16px; border-bottom: 1px solid #e4e7ed; margin-bottom: 8px; }
 .brand-icon { display: flex; }
-.brand-text { font-size: 16px; font-weight: 700; color: #c9975c; }
+.brand-text { font-size: 16px; font-weight: 700; color: #000000; }
 .main-content { flex: 1; margin-left: 200px; padding: 24px 32px; }
 </style>

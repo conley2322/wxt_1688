@@ -4,6 +4,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from './useApi.js'
 
 const allTags = ref([])
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
 const dialogVisible = ref(false)
 const form = ref({ text: '', font_color: '#fff', bg_color: '#409eff', visibility: 'public' })
 
@@ -14,9 +17,16 @@ onMounted(async () => {
 
 async function loadTags() {
   try {
-    const res = await api('/api/v1/tags/pool', 'GET')
+    const params = new URLSearchParams({
+      page: currentPage.value,
+      page_size: pageSize.value
+    })
+    const res = await api(`/api/v1/tags/pool?${params}`, 'GET')
     console.log('[TagManage] 标签池:', res)
-    if (res.code === 200) allTags.value = res.data
+    if (res.code === 200) {
+      allTags.value = res.data
+      total.value = res.total || allTags.value.length
+    }
   } catch (e) { console.error('[TagManage] 加载失败:', e) }
 }
 
@@ -61,6 +71,17 @@ async function deleteTag(tag) {
     loadTags()
   } catch {}
 }
+
+function handlePageChange(page) {
+  currentPage.value = page
+  loadTags()
+}
+
+function handleSizeChange(size) {
+  pageSize.value = size
+  currentPage.value = 1
+  loadTags()
+}
 </script>
 <template>
   <section>
@@ -88,7 +109,18 @@ async function deleteTag(tag) {
           <template #default="{ row }"><el-button size="small" type="danger" @click="deleteTag(row)">删除</el-button></template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="allTags.length === 0" description="暂无标签" />
+      <div v-if="total > 0" class="pagination">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :total="total"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
+      <el-empty v-else description="暂无标签" />
     </el-card>
     <el-dialog v-model="dialogVisible" title="添加标签" width="400px">
       <el-form :model="form" label-width="80px">
@@ -109,4 +141,5 @@ async function deleteTag(tag) {
 <style scoped>
 .page-title { font-size: 20px; font-weight: 600; color: #303133; margin: 0; }
 .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.pagination { display: flex; justify-content: center; padding: 16px 0; }
 </style>

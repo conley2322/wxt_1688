@@ -4,6 +4,8 @@ import { api } from './useApi.js'
 
 const products = ref([])
 const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
 const drawerVisible = ref(false)
 const currentProduct = ref(null)
 const productTags = ref({ mine: [], others: [] })
@@ -25,15 +27,20 @@ onMounted(async () => {
 
 async function loadProducts() {
   try {
-    const params = new URLSearchParams()
+    const params = new URLSearchParams({
+      page: currentPage.value,
+      page_size: pageSize.value
+    })
     if (searchText.value) { params.set('search', searchText.value); params.set('search_type', searchType.value) }
     if (selectedTagId.value) params.set('tag_id', selectedTagId.value)
     if (sortBy.value) { params.set('sort_by', sortBy.value); params.set('sort_order', sortOrder.value) }
 
-    const qs = params.toString()
-    const res = await api(`/api/v1/products/mine${qs ? '?' + qs : ''}`, 'GET')
+    const res = await api(`/api/v1/products/mine?${params}`, 'GET')
     console.log('[ProductManage] 商品列表:', res)
-    if (res.code === 200) { products.value = res.data; total.value = res.total || res.data.length }
+    if (res.code === 200) { 
+      products.value = res.data; 
+      total.value = res.total || res.data.length 
+    }
   } catch (e) { console.error('[ProductManage] 加载失败:', e) }
 }
 
@@ -50,12 +57,14 @@ function productUrl(offerId) {
 
 function onSearch() {
   selectedTagId.value = ''
+  currentPage.value = 1
   loadProducts()
 }
 
 function onTagSelect(tagId) {
   searchText.value = ''
   selectedTagId.value = tagId
+  currentPage.value = 1
   loadProducts()
 }
 
@@ -66,6 +75,7 @@ function onSort(by) {
     sortBy.value = by
     sortOrder.value = 'desc'
   }
+  currentPage.value = 1
   loadProducts()
 }
 
@@ -73,6 +83,18 @@ function clearFilter() {
   searchText.value = ''
   selectedTagId.value = ''
   sortBy.value = ''
+  currentPage.value = 1
+  loadProducts()
+}
+
+function handlePageChange(page) {
+  currentPage.value = page
+  loadProducts()
+}
+
+function handleSizeChange(size) {
+  pageSize.value = size
+  currentPage.value = 1
   loadProducts()
 }
 
@@ -146,36 +168,49 @@ const selectedTagLabel = computed(() => {
 
     <el-card>
       <el-empty v-if="products.length === 0" description="暂无商品" />
-      <el-table v-else :data="products" stripe @row-click="openDrawer" row-class-name="clickable-row">
-        <el-table-column label="图片" width="70">
-          <template #default="{ row }">
-            <el-image v-if="row.main_img_url" :src="row.main_img_url" style="width:48px;height:48px;border-radius:4px"
-              fit="cover" />
-            <div v-else
-              style="width:48px;height:48px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:20px">
-              ?</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="标题" min-width="120">
-          <template #default="{ row }">
-            <a :href="productUrl(row.offer_id)" target="_blank" class="product-link" @click.stop>{{ row.title }}</a>
-          </template>
-        </el-table-column>
-        <el-table-column label="我的标签" width="180">
-          <template #default="{ row }">
-            <span v-if="row.tags && row.tags.length">
-              <el-tag v-for="tag in row.tags" :key="tag.id" :color="tag.bg_color"
-                :style="{ color: tag.font_color, marginRight: '4px' }" size="small">{{ tag.text }}</el-tag>
-            </span>
-            <span v-else class="no-tags">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="我的评论" width="140" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.my_comment || '—' }}</template>
-        </el-table-column>
-        <el-table-column prop="comment_count" label="评论" width="70" align="center" />
-        <el-table-column prop="view_count" label="浏览" width="70" align="center" />
-      </el-table>
+      <template v-else>
+        <el-table :data="products" stripe @row-click="openDrawer" row-class-name="clickable-row">
+          <el-table-column label="图片" width="70">
+            <template #default="{ row }">
+              <el-image v-if="row.main_img_url" :src="row.main_img_url" style="width:48px;height:48px;border-radius:4px"
+                fit="cover" />
+              <div v-else
+                style="width:48px;height:48px;background:#f0f0f0;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#ccc;font-size:20px">
+                ?</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="标题" min-width="120">
+            <template #default="{ row }">
+              <a :href="productUrl(row.offer_id)" target="_blank" class="product-link" @click.stop>{{ row.title }}</a>
+            </template>
+          </el-table-column>
+          <el-table-column label="我的标签" width="180">
+            <template #default="{ row }">
+              <span v-if="row.tags && row.tags.length">
+                <el-tag v-for="tag in row.tags" :key="tag.id" :color="tag.bg_color"
+                  :style="{ color: tag.font_color, marginRight: '4px' }" size="small">{{ tag.text }}</el-tag>
+              </span>
+              <span v-else class="no-tags">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="我的评论" width="140" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.my_comment || '—' }}</template>
+          </el-table-column>
+          <el-table-column prop="comment_count" label="评论" width="70" align="center" />
+          <el-table-column prop="view_count" label="浏览" width="70" align="center" />
+        </el-table>
+        <div class="pagination">
+          <el-pagination
+            v-model:current-page="currentPage"
+            v-model:page-size="pageSize"
+            :total="total"
+            :page-sizes="[10, 20, 50, 100]"
+            layout="total, sizes, prev, pager, next, jumper"
+            @size-change="handleSizeChange"
+            @current-change="handlePageChange"
+          />
+        </div>
+      </template>
     </el-card>
 
     <!-- 商品详情抽屉 -->
@@ -368,5 +403,11 @@ const selectedTagLabel = computed(() => {
 .drawer-cmt-text :deep(ol) {
   padding-left: 16px;
   margin: 4px 0;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
 }
 </style>
