@@ -40,11 +40,6 @@ export const useApiStore = defineStore('api', () => {
   )
 
   // ══════════════════════════════════════
-  // 供应商合作状态
-  // ══════════════════════════════════════
-  const supplierCooperated = ref(false)
-
-  // ══════════════════════════════════════
   // 商品评论
   // ══════════════════════════════════════
   const productComments = ref([])
@@ -265,24 +260,6 @@ export const useApiStore = defineStore('api', () => {
   }
 
   // ══════════════════════════════════════
-  // 供应商合作
-  // ══════════════════════════════════════
-  async function toggleCooperate(supplier_name) {
-    const res = await ajax('/api/v1/suppliers/cooperate', 'POST', { supplier_name })
-    supplierCooperated.value = res.data.cooperated
-    return res.data
-  }
-
-  async function fetchCooperateStatus(supplier_name) {
-    try {
-      const res = await ajax(`/api/v1/suppliers/cooperate/status?supplier_name=${encodeURIComponent(supplier_name)}`, 'GET')
-      supplierCooperated.value = res.data.cooperated
-    } catch {
-      supplierCooperated.value = false
-    }
-  }
-
-  // ══════════════════════════════════════
   // Box 批量查询
   // ══════════════════════════════════════
   async function fetchBatchInfo(offer_ids) {
@@ -304,7 +281,6 @@ export const useApiStore = defineStore('api', () => {
     supplierTagsOthers,
     supplierAssignedTags,
     supplierAvailableTags,
-    supplierCooperated,
     productComments,
     supplierComments,
 
@@ -345,10 +321,6 @@ export const useApiStore = defineStore('api', () => {
     fetchSupplierTags,
     assignSupplierTag,
     removeSupplierTag,
-
-    // 供应商合作
-    toggleCooperate,
-    fetchCooperateStatus,
 
     // Box 批量
     fetchBatchInfo,

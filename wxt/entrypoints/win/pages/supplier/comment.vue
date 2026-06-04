@@ -29,8 +29,7 @@ watch(() => store.currentSupplierName, async (name) => {
   await Promise.all([
     store.fetchSupplierComments(name),
     store.fetchSupplierTags(name),
-    store.fetchTagPool(),
-    store.fetchCooperateStatus(name)
+    store.fetchTagPool()
   ])
 }, { immediate: true })
 
@@ -193,15 +192,6 @@ async function handleDeleteComment(commentId) {
         :currentUser="store.currentUser.name"
         @remove="handleTagRemove"
       />
-      <label class="coop-check">
-        <input type="checkbox" :checked="store.supplierCooperated" @change="store.toggleCooperate(store.currentSupplierName)" />
-        <span class="coop-label" :class="{ coop: store.supplierCooperated }">
-          <svg v-if="store.supplierCooperated" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>
-          <span>{{ store.supplierCooperated ? '已合作' : '标记为已合作' }}</span>
-        </span>
-      </label>
     </div>
 
     <!-- 评论工具栏 -->

@@ -245,68 +245,6 @@ db.exec(`
 `)
 
 // ============================================================
-// 13. supplier_cooperations — 供应商合作标记
-//   id            UUID主键
-//   supplier_id   供应商ID
-//   user_id       用户ID
-//   cooperated_at 合作标记时间
-//   唯一约束: (supplier_id, user_id)
-// ============================================================
-db.exec(`
-  CREATE TABLE IF NOT EXISTS supplier_cooperations (
-    id TEXT PRIMARY KEY,
-    supplier_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    cooperated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(supplier_id, user_id)
-  )
-`)
-
-// ============================================================
-// 14. product_comment_images — 商品评论图片
-//   id          UUID主键
-//   comment_id  商品评论ID
-//   file_name   原始文件名
-//   file_path   存储路径
-//   file_size   文件大小（字节）
-//   uploaded_by 上传者用户ID
-//   created_at  上传时间
-// ============================================================
-db.exec(`
-  CREATE TABLE IF NOT EXISTS product_comment_images (
-    id TEXT PRIMARY KEY,
-    comment_id TEXT NOT NULL,
-    file_name TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    file_size INTEGER,
-    uploaded_by TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`)
-
-// ============================================================
-// 15. supplier_comment_images — 供应商评论图片
-//   id          UUID主键
-//   comment_id  供应商评论ID
-//   file_name   原始文件名
-//   file_path   存储路径
-//   file_size   文件大小（字节）
-//   uploaded_by 上传者用户ID
-//   created_at  上传时间
-// ============================================================
-db.exec(`
-  CREATE TABLE IF NOT EXISTS supplier_comment_images (
-    id TEXT PRIMARY KEY,
-    comment_id TEXT NOT NULL,
-    file_name TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    file_size INTEGER,
-    uploaded_by TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`)
-
-// ============================================================
 // 16. operation_logs — 操作日志
 //   id          UUID主键
 //   user_id     操作者用户ID

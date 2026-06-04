@@ -15,8 +15,4 @@ router.use('/tags', (await import('./supplier_tags/supplier_tag_remove.js')).def
 // 供应商创建
 router.use('/', (await import('./supplier_create.js')).default)                                          // POST /api/v1/suppliers
 
-// 供应商合作
-router.use('/cooperate', (await import('./supplier_cooperate/supplier_cooperate_toggle.js')).default)  // POST /api/v1/suppliers/cooperate
-router.use('/cooperate', (await import('./supplier_cooperate/supplier_cooperate_status.js')).default)  // GET  /api/v1/suppliers/cooperate/status
-
 export default router

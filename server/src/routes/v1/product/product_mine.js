@@ -1,12 +1,16 @@
 import { Router } from 'express'
 const router = Router()
 
-// GET /api/v1/products/mine — 当前用户浏览过的商品，支持搜索和排序
+// GET /api/v1/products/mine — 当前用户浏览过的商品，支持搜索、排序和分页
 router.get('/', (req, res) => {
   try {
     const user_id = req.user.id
-    const { search, search_type, tag_id, sort_by, sort_order } = req.query
-    console.log('[product_mine] 用户:', user_id, '搜索:', search, search_type, '标签:', tag_id, '排序:', sort_by, sort_order)
+    const { search, search_type, tag_id, sort_by, sort_order, page, page_size } = req.query
+    const pageNum = parseInt(page) || 1
+    const pageSize = parseInt(page_size) || 20
+    const offset = (pageNum - 1) * pageSize
+    
+    console.log('[product_mine] 用户:', user_id, '搜索:', search, search_type, '标签:', tag_id, '排序:', sort_by, sort_order, '分页:', pageNum, pageSize)
 
     // 1. 获取当前用户浏览过的所有 offer_id
     let offerIds = req.db.query(
@@ -97,8 +101,12 @@ router.get('/', (req, res) => {
       result.sort((a, b) => sort_order === 'asc' ? 0 : -1) // 保持原始顺序(按offer_id DESC)
     }
 
-    console.log('[product_mine] 返回', result.length, '个商品')
-    res.json({ code: 200, data: result, total: result.length })
+    // 8. 分页
+    const total = result.length
+    const paginatedResult = result.slice(offset, offset + pageSize)
+
+    console.log('[product_mine] 返回', paginatedResult.length, '/', total, '个商品')
+    res.json({ code: 200, data: paginatedResult, total, page: pageNum, page_size: pageSize })
   } catch (error) {
     console.error(error)
     res.status(500).json({ code: 500, message: '服务器错误' })
