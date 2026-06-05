@@ -6,6 +6,11 @@ export default defineConfig({
     host_permissions: ['http://*:3000/*'],
     permissions: ['storage'],
   },
+  vite: () => ({
+    esbuild: {
+      drop: process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [],
+    },
+  }),
   resolve: {
     alias: {
       '@': '/',
