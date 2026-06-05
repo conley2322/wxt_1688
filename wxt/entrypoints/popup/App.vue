@@ -5,6 +5,7 @@ const isLoggedIn = ref(false)
 const loading = ref(false)
 const error = ref('')
 const username = ref('')
+const avatarColor = ref('#c9975c')
 
 const serverAddress = ref('')
 const formUsername = ref('')
@@ -12,12 +13,20 @@ const formPassword = ref('')
 const showContent = ref(false)
 const isTransitioning = ref(false)
 
+const colorPool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
+function hashColor(name) {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  return colorPool[Math.abs(hash) % colorPool.length]
+}
+
 async function restoreSession() {// 从本地存储恢复会话
   try {
-    const stored = await browser.storage.local.get(['token', 'username', 'serverAddress'])
+    const stored = await browser.storage.local.get(['token', 'username', 'serverAddress', 'avatarColor'])
     if (stored.token && stored.username) {
       username.value = stored.username
       serverAddress.value = stored.serverAddress || ''
+      avatarColor.value = stored.avatarColor || hashColor(stored.username)
       isLoggedIn.value = true
     }
   } catch (e) { /* ignore */ }
@@ -55,13 +64,17 @@ async function handleLogin() {// 处理登录
     const { token, user } = data.data
     console.log(data.data);
 
+    const color = user.avatar_color || hashColor(user.username)
+
     await browser.storage.local.set({
       token,
       username: user.username,
       serverAddress: baseUrl,
+      avatarColor: color,
     })
 
     username.value = user.username
+    avatarColor.value = color
     serverAddress.value = baseUrl
     isLoggedIn.value = true
 
@@ -172,8 +185,8 @@ onMounted(async () => {
 
       <!-- 已登录主页 -->
       <div v-else key="home" class="card home-card">
-        <div class="avatar-ring">
-          <div class="avatar">{{ username.charAt(0).toUpperCase() }}</div>
+        <div class="avatar-ring" :style="{ background: `conic-gradient(from 0deg, ${avatarColor}, ${avatarColor}cc, ${avatarColor}88, ${avatarColor})` }">
+          <div class="avatar" :style="{ color: avatarColor }">{{ username.charAt(0).toUpperCase() }}</div>
         </div>
         <h2 class="welcome-text">欢迎回来</h2>
         <div class="user-meta">
@@ -626,7 +639,6 @@ onMounted(async () => {
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: conic-gradient(from 0deg, var(--accent), #d4a862, #b8864a, #c9975c);
   padding: 3px;
   margin-bottom: 16px;
   box-shadow: 0 0 20px rgba(201, 151, 92, 0.2);
@@ -656,7 +668,6 @@ onMounted(async () => {
   height: 100%;
   border-radius: 50%;
   background: #fff;
-  color: var(--accent);
   font-size: 26px;
   font-weight: 700;
   display: flex;

@@ -56,26 +56,46 @@ async function loadProfile() {
   }
 }
 
+async function saveColor(color) {
+  try {
+    const res = await api('/api/v1/users/profile', 'PUT', { avatar_color: color })
+    if (res.code === 200) {
+      ElMessage.success('头像颜色已更新')
+    }
+  } catch {
+    ElMessage.error('保存失败')
+  }
+}
+
 function selectColor(color) {
   user.avatar_color = color
   customColor.value = color
+  saveColor(color)
 }
 
 function applyCustomColor() {
   const c = customColor.value.trim()
   if (c && /^#[0-9a-fA-F]{6}$/.test(c)) {
     user.avatar_color = c
+    saveColor(c)
   } else if (c) {
     ElMessage.warning('请输入有效的十六进制颜色，如 #ff6a00')
+  }
+}
+
+function onNativeColorPick(e) {
+  const c = e.target.value
+  if (c) {
+    user.avatar_color = c
+    customColor.value = c
+    saveColor(c)
   }
 }
 
 async function saveProfile() {
   saving.value = true
   try {
-    const body = { avatar_color: user.avatar_color || null }
-    if (user.email) body.email = user.email
-    const res = await api('/api/v1/users/profile', 'PUT', body)
+    const res = await api('/api/v1/users/profile', 'PUT', { email: user.email || '' })
     if (res.code === 200) {
       ElMessage.success('保存成功')
       Object.assign(user, res.data)
@@ -114,71 +134,104 @@ async function changePassword() {
 </script>
 
 <template>
-  <section v-loading="loading">
+  <section class="profile-page" v-loading="loading">
     <div class="page-header">
       <h2 class="page-title">个人中心</h2>
     </div>
 
-    <el-row :gutter="24">
-      <!-- 左侧：头像预览 + 颜色选择 -->
-      <el-col :span="10">
-        <el-card>
-          <template #header><span>头像设置</span></template>
-          <div class="avatar-section">
-            <div class="avatar-preview" :style="{ background: displayColor }">
-              {{ avatarInitial }}
+    <!-- 顶部：头像 + 基本信息概览 -->
+    <div class="profile-hero">
+      <div class="hero-avatar-wrap">
+        <div class="hero-avatar" :style="{ background: displayColor }">
+          {{ avatarInitial }}
+        </div>
+        <div class="hero-info">
+          <div class="hero-name">{{ user.username }}</div>
+          <div class="hero-meta">
+            <el-tag :type="user.role === 'admin' ? 'warning' : 'info'" size="small">
+              {{ user.role === 'admin' ? '管理员' : '普通用户' }}
+            </el-tag>
+            <span v-if="user.created_at" class="hero-date">注册于 {{ user.created_at?.slice(0, 10) }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 主体：双栏 -->
+    <el-row :gutter="24" class="profile-body">
+      <!-- 左：头像颜色 -->
+      <el-col :md="12" :sm="24">
+        <el-card shadow="hover" class="profile-card">
+          <template #header>
+            <div class="card-header">
+              <span class="card-title">头像颜色</span>
+              <span class="card-sub">选择你的专属色彩</span>
             </div>
-            <p class="avatar-hint">选择你喜欢的头像颜色</p>
-          </div>
-          <div class="color-grid">
-            <span
-              v-for="c in presetColors" :key="c"
-              class="color-swatch"
-              :class="{ active: user.avatar_color === c }"
-              :style="{ background: c }"
-              @click="selectColor(c)"
-            ></span>
-          </div>
-          <div class="custom-color-row">
-            <el-input v-model="customColor" placeholder="#ff6a00" size="small" style="width: 130px" @blur="applyCustomColor" />
-            <el-button size="small" @click="applyCustomColor">自定义</el-button>
+          </template>
+          <div class="color-section">
+            <div class="color-presets">
+              <button
+                v-for="c in presetColors" :key="c"
+                class="color-btn"
+                :class="{ active: user.avatar_color === c }"
+                :style="{ '--c': c }"
+                @click="selectColor(c)"
+                :aria-label="`选择颜色 ${c}`"
+              >
+                <svg v-if="user.avatar_color === c" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              </button>
+            </div>
+            <div class="color-custom">
+              <span class="color-custom-label">自选</span>
+              <input
+                type="color"
+                :value="user.avatar_color || '#ff6a00'"
+                class="native-picker"
+                @change="onNativeColorPick"
+              />
+              <el-input
+                v-model="customColor"
+                placeholder="#ff6a00"
+                size="small"
+                class="color-input"
+                @blur="applyCustomColor"
+                @keyup.enter="applyCustomColor"
+              />
+            </div>
           </div>
         </el-card>
       </el-col>
 
-      <!-- 右侧：账户信息 + 密码 -->
-      <el-col :span="14">
-        <el-card>
-          <template #header><span>账户信息</span></template>
-          <el-form label-width="80px" size="default">
-            <el-form-item label="用户名">
-              <el-input :model-value="user.username" disabled />
-            </el-form-item>
-            <el-form-item label="角色">
-              <el-tag :type="user.role === 'admin' ? 'warning' : 'info'" size="small">
-                {{ user.role === 'admin' ? '管理员' : '普通用户' }}
-              </el-tag>
-            </el-form-item>
+      <!-- 右：账户 + 密码 -->
+      <el-col :md="12" :sm="24">
+        <el-card shadow="hover" class="profile-card">
+          <template #header>
+            <div class="card-header">
+              <span class="card-title">账户信息</span>
+            </div>
+          </template>
+          <el-form label-width="72px" size="default" class="profile-form">
             <el-form-item label="邮箱">
-              <el-input v-model="user.email" placeholder="请输入邮箱" />
-            </el-form-item>
-            <el-form-item label="注册时间" v-if="user.created_at">
-              <span class="info-text">{{ user.created_at }}</span>
+              <el-input v-model="user.email" placeholder="请输入邮箱地址" />
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="saving" @click="saveProfile">保存</el-button>
+              <el-button type="primary" :loading="saving" @click="saveProfile" class="save-btn">保存修改</el-button>
             </el-form-item>
           </el-form>
         </el-card>
 
-        <el-card style="margin-top: 16px">
-          <template #header><span>修改密码</span></template>
-          <el-form label-width="80px" size="default">
+        <el-card shadow="hover" class="profile-card" style="margin-top: 16px">
+          <template #header>
+            <div class="card-header">
+              <span class="card-title">修改密码</span>
+            </div>
+          </template>
+          <el-form label-width="72px" size="default" class="profile-form">
             <el-form-item label="当前密码">
               <el-input v-model="pwForm.current" type="password" show-password placeholder="输入当前密码" />
             </el-form-item>
             <el-form-item label="新密码">
-              <el-input v-model="pwForm.newPw" type="password" show-password placeholder="输入新密码" />
+              <el-input v-model="pwForm.newPw" type="password" show-password placeholder="至少 4 位" />
             </el-form-item>
             <el-form-item label="确认密码">
               <el-input v-model="pwForm.confirm" type="password" show-password placeholder="再次输入新密码" />
@@ -194,35 +247,102 @@ async function changePassword() {
 </template>
 
 <style scoped>
-.page-title { font-size: 20px; font-weight: 600; color: #303133; margin: 0; }
-.page-header { margin-bottom: 24px; }
+/* ── 页面 ── */
+.profile-page { max-width: 900px; }
 
-.avatar-section {
-  display: flex; flex-direction: column; align-items: center;
-  margin-bottom: 20px;
+.page-title { font-size: 22px; font-weight: 700; color: #1a1a2e; margin: 0; letter-spacing: -0.3px; }
+.page-header { margin-bottom: 28px; }
+
+/* ── 顶部 Hero ── */
+.profile-hero {
+  background: linear-gradient(135deg, #f8f9fc 0%, #f0f2f8 100%);
+  border-radius: 16px;
+  padding: 28px 32px;
+  margin-bottom: 24px;
+  border: 1px solid #eef0f6;
 }
-.avatar-preview {
-  width: 80px; height: 80px; border-radius: 50%;
+.hero-avatar-wrap {
+  display: flex; align-items: center; gap: 20px;
+}
+.hero-avatar {
+  width: 72px; height: 72px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 32px; font-weight: 700;
-  margin-bottom: 8px;
+  color: #fff; font-size: 28px; font-weight: 700;
+  flex-shrink: 0;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
 }
-.avatar-hint { font-size: 13px; color: #999; margin: 0; }
+.hero-info { min-width: 0; }
+.hero-name { font-size: 20px; font-weight: 700; color: #1a1a2e; margin-bottom: 6px; }
+.hero-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.hero-date { font-size: 13px; color: #999; }
 
-.color-grid {
-  display: flex; flex-wrap: wrap; gap: 10px;
-  justify-content: center; margin-bottom: 12px;
+/* ── 卡片 ── */
+.profile-card {
+  border-radius: 12px;
+  border: 1px solid #eef0f6;
 }
-.color-swatch {
-  width: 32px; height: 32px; border-radius: 50%;
-  cursor: pointer; border: 3px solid transparent;
-  transition: border-color 0.2s, transform 0.2s;
+.profile-card :deep(.el-card__header) {
+  padding: 18px 24px 12px;
+  border-bottom: 1px solid #f2f3f8;
 }
-.color-swatch:hover { transform: scale(1.15); }
-.color-swatch.active { border-color: #333; transform: scale(1.1); }
+.profile-card :deep(.el-card__body) {
+  padding: 20px 24px 24px;
+}
+.card-header {
+  display: flex; align-items: baseline; gap: 8px;
+}
+.card-title { font-size: 15px; font-weight: 600; color: #1a1a2e; }
+.card-sub { font-size: 12px; color: #b0b5c0; }
 
-.custom-color-row {
-  display: flex; gap: 8px; justify-content: center;
+/* ── 颜色选择器 ── */
+.color-section { display: flex; flex-direction: column; gap: 20px; }
+
+.color-presets {
+  display: flex; flex-wrap: wrap; gap: 12px;
 }
-.info-text { color: #999; font-size: 13px; }
+.color-btn {
+  width: 40px; height: 40px; border-radius: 12px;
+  border: none; cursor: pointer;
+  background: var(--c);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.2s, box-shadow 0.2s;
+  position: relative;
+}
+.color-btn:hover {
+  transform: scale(1.12);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+}
+.color-btn.active {
+  transform: scale(1.1);
+  box-shadow: 0 0 0 3px #fff, 0 0 0 5px var(--c);
+}
+.color-btn svg { filter: drop-shadow(0 1px 1px rgba(0,0,0,0.2)); }
+
+.color-custom {
+  display: flex; align-items: center; gap: 10px;
+}
+.color-custom-label { font-size: 13px; color: #888; flex-shrink: 0; }
+.color-input { width: 130px; }
+
+.native-picker {
+  width: 32px; height: 32px;
+  border: 1px solid #ddd; border-radius: 8px;
+  padding: 2px; cursor: pointer;
+  background: transparent;
+}
+.native-picker::-webkit-color-swatch-wrapper { padding: 0; }
+.native-picker::-webkit-color-swatch { border-radius: 6px; border: none; }
+
+/* ── 表单 ── */
+.profile-form :deep(.el-form-item) { margin-bottom: 18px; }
+.profile-form :deep(.el-form-item__label) { font-weight: 500; color: #555; }
+.save-btn { min-width: 100px; }
+
+@media (max-width: 768px) {
+  .profile-hero { padding: 20px; }
+  .hero-avatar { width: 56px; height: 56px; font-size: 22px; }
+  .hero-name { font-size: 17px; }
+  .profile-card :deep(.el-card__body) { padding: 16px; }
+  .color-btn { width: 36px; height: 36px; }
+}
 </style>

@@ -37,7 +37,7 @@ router.post('/', (req, res, next) => {
           id: user.id,
           username: user.username,
           email: user.email,
-          color: user.color,
+          avatar_color: user.avatar_color || null,
           status: user.status,
           role: user.role
         }
