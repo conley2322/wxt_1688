@@ -98,6 +98,31 @@ export const useApiStore = defineStore('api', () => {
     if (stored.username) {
       currentUser.value.name = stored.username
       currentUser.value.initial = stored.username.charAt(0).toUpperCase()
+
+      // 从服务端拉取用户头像颜色
+      try {
+        const data = await ajax('/api/v1/users?page_size=200', 'GET')
+        const me = data.data?.find(u => u.username === stored.username)
+        if (me?.avatar_color) {
+          currentUser.value.color = me.avatar_color
+        } else {
+          // 降级：哈希取色
+          let hash = 0
+          for (let i = 0; i < stored.username.length; i++) {
+            hash = stored.username.charCodeAt(i) + ((hash << 5) - hash)
+          }
+          const pool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
+          currentUser.value.color = pool[Math.abs(hash) % pool.length]
+        }
+      } catch {
+        // 网络失败时降级
+        let hash = 0
+        for (let i = 0; i < stored.username.length; i++) {
+          hash = stored.username.charCodeAt(i) + ((hash << 5) - hash)
+        }
+        const pool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
+        currentUser.value.color = pool[Math.abs(hash) % pool.length]
+      }
     }
   }
 

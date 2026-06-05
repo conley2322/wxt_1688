@@ -9,7 +9,7 @@ router.get('/', (req, res) => {
 
     const total = req.db.get('SELECT COUNT(*) as count FROM users').count
     const users = req.db.query(
-      'SELECT id, username, email, role, status, created_at FROM users ORDER BY id DESC LIMIT ? OFFSET ?',
+      'SELECT id, username, email, avatar, avatar_color, role, status, created_at FROM users ORDER BY id DESC LIMIT ? OFFSET ?',
       [pageSize, offset]
     )
     

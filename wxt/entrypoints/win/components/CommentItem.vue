@@ -118,6 +118,9 @@ const isMine = computed(() => props.comment.username === props.currentUser)
 
 const colorPool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
 const avatarColor = computed(() => {
+  // 优先使用用户自选颜色
+  if (props.comment.avatar_color) return props.comment.avatar_color
+  // 哈希降级
   let hash = 0; const name = props.comment.username || ''
   for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
   return colorPool[Math.abs(hash) % colorPool.length]

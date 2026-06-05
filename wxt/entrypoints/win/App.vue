@@ -3,7 +3,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DraggableWindow from './components/DraggableWindow.vue'
-import HsAvatarStack from '../../components/HsAvatarStack.vue'
 import { useApiStore } from '@/stores/api/api.js'
 import { useDomStore } from '@/stores/dom.js'
 import stopLoading from '@/utils/stopLoading.js'
@@ -59,6 +58,7 @@ onMounted(async () => {
       viewerStats.value = res.data.viewers.map(v => ({
         initial: v.initial,
         name: v.username,
+        avatar_color: v.avatar_color || null,
         count: v.count
       }))
     }
@@ -86,9 +86,22 @@ const totalViewCount = computed(() =>
   viewerStats.value.reduce((s, v) => s + v.count, 0)
 )
 
+// ── 头像颜色（用户自选 > 哈希降级） ──
+const colorPool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
+function avatarColor(v) {
+  if (v.avatar_color) return v.avatar_color
+  let hash = 0
+  for (let i = 0; i < (v.name || '').length; i++) hash = (v.name || '').charCodeAt(i) + ((hash << 5) - hash)
+  return colorPool[Math.abs(hash) % colorPool.length]
+}
+
 // ── 头像栈数据 ──
 const viewerAvatars = computed(() =>
-  viewerStats.value.map(v => ({ initial: v.initial, tooltip: `${v.name} · ${v.count}次` }))
+  viewerStats.value.map(v => ({
+    initial: v.initial,
+    tooltip: `${v.name} · ${v.count}次`,
+    color: avatarColor(v)
+  }))
 )
 
 </script>
@@ -107,7 +120,16 @@ const viewerAvatars = computed(() =>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             {{ totalViewCount }}次
           </span>
-          <HsAvatarStack :viewers="viewerAvatars" :maxShow="3" variant="product" />
+          <span class="avatar-stack">
+            <span
+              v-for="(v, i) in viewerAvatars.slice(0, 3)"
+              :key="i"
+              class="avatar-dot"
+              :style="{ background: v.color, zIndex: viewerAvatars.length - i }"
+              :title="v.tooltip"
+            >{{ v.initial }}</span>
+            <span v-if="viewerAvatars.length > 3" class="avatar-more">+{{ viewerAvatars.length - 3 }}</span>
+          </span>
         </div>
       </div>
     </div>
@@ -235,5 +257,21 @@ const viewerAvatars = computed(() =>
 .content-area::-webkit-scrollbar-thumb {
   background: #ddd;
   border-radius: 2px;
+}
+
+/* ── 头像栈 ── */
+.avatar-stack { display: flex; align-items: center; margin-left: auto; flex-shrink: 0; }
+.avatar-dot {
+  width: 20px; height: 20px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 600; color: #fff;
+  border: 1.5px solid #f5f6f8; flex-shrink: 0;
+}
+.avatar-dot:not(:first-child) { margin-left: -6px; }
+.avatar-more {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #e0e0e0; color: #999; font-size: 9px; font-weight: 500;
+  border: 1.5px solid #f5f6f8; margin-left: -6px; flex-shrink: 0;
 }
 </style>

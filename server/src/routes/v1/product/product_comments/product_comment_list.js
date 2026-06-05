@@ -6,7 +6,7 @@ router.get('/', (req, res) => {
   try {
     const { offer_id } = req.params
     const comments = req.db.query(
-      `SELECT pc.id, pc.user_id, u.username, pc.text, pc.img, pc.created_at, pc.updated_at
+      `SELECT pc.id, pc.user_id, u.username, u.avatar_color, pc.text, pc.img, pc.created_at, pc.updated_at
        FROM product_comments pc
        JOIN users u ON pc.user_id = u.id
        WHERE pc.offer_id = ?

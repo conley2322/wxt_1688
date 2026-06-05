@@ -9,6 +9,7 @@ import bcrypt from 'bcryptjs'
 //   email     邮箱（唯一）
 //   password  密码（bcrypt加密）
 //   avatar    头像URL
+//   avatar_color 头像颜色（用户自选，如 #ff6a00）
 //   status    账号状态 1=正常 0=禁用
 //   created_at 创建时间
 //   updated_at 更新时间
@@ -20,6 +21,7 @@ db.exec(`
     email TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
     avatar TEXT,
+    avatar_color TEXT,
     role TEXT DEFAULT 'user',
     status INTEGER DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -291,6 +293,7 @@ db.exec(`
 // 兼容旧表：补充新增字段
 try { db.exec(`ALTER TABLE operation_logs ADD COLUMN username TEXT`) } catch (e) {}
 try { db.exec(`ALTER TABLE operation_logs ADD COLUMN detail TEXT`) } catch (e) {}
+try { db.exec(`ALTER TABLE users ADD COLUMN avatar_color TEXT`) } catch (e) {}
 
 console.log('Database initialized successfully — 16 tables created')
 

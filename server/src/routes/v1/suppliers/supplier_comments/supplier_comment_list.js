@@ -10,7 +10,7 @@ router.get('/', (req, res) => {
     }
 
     const comments = req.db.query(
-      `SELECT sc.id, sc.user_id, u.username, sc.text, sc.created_at, sc.updated_at
+      `SELECT sc.id, sc.user_id, u.username, u.avatar_color, sc.text, sc.created_at, sc.updated_at
        FROM supplier_comments sc
        JOIN users u ON sc.user_id = u.id
        JOIN suppliers s ON sc.supplier_id = s.id

@@ -8,7 +8,6 @@ import TagPool from '@/entrypoints/win/components/TagPool.vue'
 import InputSettings from '@/entrypoints/win/components/InputSettings.vue'
 import CommentItem from '@/entrypoints/win/components/CommentItem.vue'
 import CommentInput from '@/entrypoints/win/components/CommentInput.vue'
-import UserFilter from '@/entrypoints/win/components/UserFilter.vue'
 
 const store = useApiStore()
 
@@ -42,9 +41,8 @@ const showCommentInput = computed(() =>
   inputMode.value === 'comment' && (!myComment.value || isEditing.value)
 )
 
-// ── 评论排序/筛选 ──
+// ── 评论排序 ──
 const sortOrder = ref('newest')
-const filterUsers = ref([])
 
 function toggleSort() {
   sortOrder.value = sortOrder.value === 'newest' ? 'oldest' : 'newest'
@@ -54,23 +52,12 @@ const sortLabel = computed(() => sortOrder.value === 'newest' ? '最新' : '最�
 
 const filteredComments = computed(() => {
   let list = [...store.supplierComments]
-  if (filterUsers.value.length > 0) {
-    list = list.filter(c => filterUsers.value.includes(c.username))
-  }
   if (sortOrder.value === 'newest') {
     list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
   } else {
     list.sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
   }
   return list
-})
-
-const userList = computed(() => {
-  const map = {}
-  store.supplierComments.forEach(c => {
-    map[c.username] = (map[c.username] || 0) + 1
-  })
-  return Object.entries(map).map(([name, count]) => ({ name, count }))
 })
 
 // ── 输入框配置 ──
@@ -196,7 +183,6 @@ async function handleDeleteComment(commentId) {
 
     <!-- 评论工具栏 -->
     <div class="toolbar">
-      <UserFilter :users="userList" @apply="(u) => filterUsers = u" />
       <span class="sort-btn" @click="toggleSort">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 6h18M3 12h12M3 18h6"/>
@@ -235,6 +221,8 @@ async function handleDeleteComment(commentId) {
       <CommentInput
         v-if="showCommentInput"
         ref="commentInputRef"
+        :userColor="store.currentUser.color"
+        :userInitial="store.currentUser.initial"
         :placeholder="inputPlaceholder"
         :sendLabel="inputSendLabel"
         @send="handleSend"

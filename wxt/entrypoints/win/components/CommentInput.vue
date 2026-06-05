@@ -257,7 +257,7 @@ defineExpose({ setText, toggleFullscreen })
 .fullscreen-btn:hover { background: #f0f0f0; color: #333; }
 .send-btn { background: #1677ff; color: #fff; font-size: 12px; padding: 5px 14px; font-weight: 500; }
 .send-btn:disabled { background: #ccc; cursor: not-allowed; }
-.editor-container { min-height: 60px; max-height: 200px; overflow-y: auto; }
+.editor-container { min-height: 60px; max-height: 300px; overflow-y: auto; }
 .editor-container.is-fullscreen { flex: 1; max-height: none; }
 
 :deep(.w-e-toolbar) { border: none !important; border-bottom: 1px solid #f0f0f0 !important; border-radius: 0 !important; }

@@ -1,6 +1,5 @@
 <script setup>
 import { computed } from 'vue'
-import HsAvatarStack from '../../components/HsAvatarStack.vue'
 
 const props = defineProps(['parentEl', 'offerId', 'batchCache'])
 
@@ -31,11 +30,22 @@ const commentCount = computed(() => info.value?.comment_count ?? 0)
 const tagCount = computed(() => info.value?.tag_count ?? 0)
 const iHaveViewed = computed(() => info.value?.i_have_viewed ?? false)
 
+// 头像颜色（用户自选 > 哈希降级）
+const colorPool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
+function avatarColor(v) {
+  if (v.avatar_color) return v.avatar_color
+  let hash = 0
+  const name = v.username || ''
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  return colorPool[Math.abs(hash) % colorPool.length]
+}
+
 // 头像栈
 const viewerAvatars = computed(() =>
   (info.value?.viewers || []).map(v => ({
     initial: v.initial || v.username?.charAt(0) || '?',
-    tooltip: `${v.username} · ${v.count}次`
+    tooltip: `${v.username} · ${v.count}次`,
+    color: avatarColor(v)
   }))
 )
 
@@ -73,8 +83,15 @@ const dotColor = computed(() => {
       </span>
 
       <!-- 头像栈 -->
-      <span class="box-avatars">
-        <HsAvatarStack v-if="viewerAvatars.length" :viewers="viewerAvatars" :maxShow="3" variant="product" />
+      <span v-if="viewerAvatars.length" class="avatar-stack">
+        <span
+          v-for="(v, i) in viewerAvatars.slice(0, 3)"
+          :key="i"
+          class="avatar-dot"
+          :style="{ background: v.color, zIndex: viewerAvatars.length - i }"
+          :title="v.tooltip"
+        >{{ v.initial }}</span>
+        <span v-if="viewerAvatars.length > 3" class="avatar-more">+{{ viewerAvatars.length - 3 }}</span>
       </span>
     </div>
   </div>
@@ -117,7 +134,19 @@ const dotColor = computed(() => {
   opacity: 0.5;
   flex-shrink: 0;
 }
-.box-avatars :deep(.hs-avatar-bar) {
-  margin-left: 0;
+/* ── 头像栈 ── */
+.avatar-stack { display: flex; align-items: center; flex-shrink: 0; }
+.avatar-dot {
+  width: 16px; height: 16px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 8px; font-weight: 600; color: #fff;
+  border: 1.5px solid #f5f6f8; flex-shrink: 0;
+}
+.avatar-dot:not(:first-child) { margin-left: -5px; }
+.avatar-more {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #e0e0e0; color: #999; font-size: 8px; font-weight: 500;
+  border: 1.5px solid #f5f6f8; margin-left: -5px; flex-shrink: 0;
 }
 </style>

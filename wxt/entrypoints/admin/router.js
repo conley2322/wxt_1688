@@ -11,6 +11,7 @@ const routes = [
   { path: '/suppliers', component: () => import('./pages/SupplierManage.vue'), meta: { title: '供应商管理' } },
   { path: '/operations', component: () => import('./pages/OperationLogs.vue'), meta: { title: '操作记录' } },
   { path: '/settings', component: () => import('./pages/SettingsPage.vue'), meta: { title: '系统设置' } },
+  { path: '/profile', component: () => import('./pages/ProfilePage.vue'), meta: { title: '个人中心' } },
   { path: '/about', component: () => import('./pages/AboutPage.vue'), meta: { title: '关于我们' } },
 ]
 

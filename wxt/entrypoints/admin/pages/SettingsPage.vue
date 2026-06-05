@@ -128,7 +128,7 @@ async function autoSave() {
         </el-form-item>
         <el-form-item label="停止页面加载">
           <el-switch v-model="pageSwitches.enableStopLoading" active-text="开启" inactive-text="关闭" @change="autoSave" />
-          <div class="switch-desc">进入商品详情页时自动停止页面加载（window.stop），让刷新按钮停止转圈</div>
+          <div class="switch-desc">进入商品详情页时自动停止页面加载，有些页面可能无法加载详情页，默认关闭</div>
         </el-form-item>
       </el-form>
     </el-card>

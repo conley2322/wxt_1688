@@ -11,6 +11,7 @@ const isAdmin = ref(false)
 
 const allNavItems = [
   { path: '/dashboard', label: '概览', icon: 'DataBoard' },
+  { path: '/profile', label: '个人中心', icon: 'UserFilled' },
   { path: '/users', label: '用户管理', icon: 'User', adminOnly: true },
   { path: '/products', label: '商品管理', icon: 'Goods' },
   { path: '/suppliers', label: '供应商管理', icon: 'Shop' },

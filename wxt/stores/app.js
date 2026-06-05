@@ -47,7 +47,7 @@ export const useAppStore = defineStore('app', () => {
       /** 首页推荐渲染：www.1688.com swiper */
       enableHomeRecommend: true,
       /** 进入 1688 商品详情页时自动停止页面加载（window.stop） */
-      enableStopLoading: true,
+      enableStopLoading: false,
     },
   }
 

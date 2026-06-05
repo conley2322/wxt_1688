@@ -37,7 +37,7 @@ router.post('/', (req, res) => {
 
     // 批量查浏览用户
     const viewers = req.db.query(
-      `SELECT v.offer_id, u.username, COUNT(*) AS count
+      `SELECT v.offer_id, u.username, u.avatar_color, COUNT(*) AS count
        FROM view_records v
        JOIN users u ON v.user_id = u.id
        WHERE v.offer_id IN (${placeholders})
@@ -62,6 +62,7 @@ router.post('/', (req, res) => {
       const vs = viewers.filter(r => r.offer_id === id).map(v => ({
         username: v.username,
         initial: v.username.charAt(0),
+        avatar_color: v.avatar_color || null,
         count: v.count
       }))
 
