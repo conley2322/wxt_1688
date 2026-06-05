@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { deleteRemovedImages } from '../../../../utils/deleteImages.js'
 const router = Router()
 
 // PUT /api/v1/suppliers/comments/:id
@@ -19,6 +20,9 @@ router.put('/:id', (req, res) => {
     if (String(comment.user_id) !== String(user_id)) {
       return res.status(403).json({ code: 403, message: '只能修改自己的评论' })
     }
+
+    // 删除旧文本中有但新文本中已经没有的图片
+    deleteRemovedImages(comment.text, text)
 
     const now = new Date().toISOString()
     req.db.run('UPDATE supplier_comments SET text = ?, updated_at = ? WHERE id = ?', [text.trim(), now, id])

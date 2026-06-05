@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { deleteImagesFromText } from '../../../../utils/deleteImages.js'
 const router = Router()
 
 // DELETE /api/v1/suppliers/comments/:id
@@ -14,6 +15,9 @@ router.delete('/:id', (req, res) => {
     if (String(comment.user_id) !== String(user_id)) {
       return res.status(403).json({ code: 403, message: '只能删除自己的评论' })
     }
+
+    // 删除评论中的图片文件
+    deleteImagesFromText(comment.text)
 
     req.db.run('DELETE FROM supplier_comments WHERE id = ?', [id])
 
