@@ -17,7 +17,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const uploadPath = path.join(__dirname, '../uploads')
-console.log('[app] 静态文件目录:', uploadPath)
+// console.log('[app] 静态文件目录:', uploadPath)
 app.use('/uploads', express.static(uploadPath))
 // 挂载 db 到 req
 app.use((req, res, next) => {

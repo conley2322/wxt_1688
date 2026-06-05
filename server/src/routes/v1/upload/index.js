@@ -3,18 +3,15 @@ import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
 import { authenticate } from '../../../middlewares/auth/index.js'
+import config from '../../../config/index.js'
 
 const router = Router()
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const uploadsDir = path.join(__dirname, '../../../../uploads')
 
 // 确保上传根目录存在
-console.log('[upload] 上传目录:', uploadsDir)
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true })
-  console.log('[upload] 目录已创建')
-} else {
-  console.log('[upload] 目录已存在')
 }
 
 // POST /api/v1/upload/image
@@ -37,7 +34,7 @@ router.post('/image', authenticate, (req, res) => {
     const userDir = path.join(uploadsDir, username)
     if (!fs.existsSync(userDir)) {
       fs.mkdirSync(userDir, { recursive: true })
-      console.log('[upload] 用户文件夹已创建:', userDir)
+      if (!config.isProduction) console.log('[upload] 用户文件夹已创建:', userDir)
     }
 
     const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1]
@@ -47,7 +44,7 @@ router.post('/image', authenticate, (req, res) => {
 
     // 写入文件
     const buffer = Buffer.from(matches[2], 'base64')
-    console.log('[upload] 写入文件:', filepath, '大小:', buffer.length, 'bytes')
+    if (!config.isProduction) console.log('[upload] 写入文件:', filepath, '大小:', buffer.length, 'bytes')
     fs.writeFileSync(filepath, buffer)
 
     // 验证文件是否写入成功
@@ -56,7 +53,7 @@ router.post('/image', authenticate, (req, res) => {
       return res.status(500).json({ code: 500, message: '文件保存失败' })
     }
     const stat = fs.statSync(filepath)
-    console.log('[upload] 文件已保存:', filepath, '磁盘大小:', stat.size, 'bytes')
+    if (!config.isProduction) console.log('[upload] 文件已保存:', filepath, '磁盘大小:', stat.size, 'bytes')
 
     const url = `/uploads/${username}/${filename}`
     res.json({ code: 200, data: { url } })

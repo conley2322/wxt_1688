@@ -22,4 +22,12 @@ http.createServer(app).listen(config.port, '0.0.0.0', () => {
   console.log(`✅ Server running at:`)
   console.log(`   本机:   http://localhost:${config.port}`)
   console.log(`   局域网: http://${host}:${config.port}`)
+
+  // ── 生产环境：启动后静默 console.log / console.debug ──
+  if (config.isProduction) {
+    const noop = () => {}
+    console.debug = noop
+    console.log = noop
+    // 保留 console.warn / console.error
+  }
 })
