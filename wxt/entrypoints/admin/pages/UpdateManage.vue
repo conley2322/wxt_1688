@@ -3,8 +3,8 @@ import { ref, onMounted } from 'vue'
 import { Calendar } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app.js'
-import { api } from './useApi.js'
-import UpdateTimeline from './UpdateTimeline.vue'
+import { api } from '../utils/useApi.js'
+import UpdateTimeline from '../components/UpdateTimeline.vue'
 
 const router = useRouter()
 const appStore = useAppStore()

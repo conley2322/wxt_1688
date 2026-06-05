@@ -1,8 +1,8 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { api } from './useApi.js'
+import { api } from '../utils/useApi.js'
 import { List, Grid, ArrowDown } from '@element-plus/icons-vue'
-import ProductMasonryCard from './ProductMasonryCard.vue'
+import ProductMasonryCard from '../components/ProductMasonryCard.vue'
 
 const products = ref([])
 const total = ref(0)

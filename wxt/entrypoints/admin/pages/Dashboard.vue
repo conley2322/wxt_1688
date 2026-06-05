@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { api } from './useApi.js'
+import { api } from '../utils/useApi.js'
 
 const userCount = ref(0)
 const tagCount = ref(0)

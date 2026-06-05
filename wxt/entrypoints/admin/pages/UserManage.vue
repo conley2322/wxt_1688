@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api } from './useApi.js'
+import { api } from '../utils/useApi.js'
 
 const users = ref([])
 const total = ref(0)

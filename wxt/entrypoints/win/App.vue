@@ -25,7 +25,12 @@ const currentTab = computed(() => {
 // ── 挂载时从页面抓取真实数据 ──
 onMounted(async () => {
   console.log('App mounted win页面')
-  stopLoading()
+
+  // 读取设置，决定是否停止页面加载
+  const stored = await browser.storage.local.get('appSettings')
+  if (stored.appSettings?.enableStopLoading !== false) {
+    stopLoading()
+  }
 
   // 初始化用户
   await store.initUser()

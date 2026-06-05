@@ -12,6 +12,9 @@ router.use('/tags', (await import('./supplier_tags/supplier_tag_list.js')).defau
 router.use('/tags', (await import('./supplier_tags/supplier_tag_add.js')).default)                  // POST   /api/v1/suppliers/tags
 router.use('/tags', (await import('./supplier_tags/supplier_tag_remove.js')).default)               // DELETE /api/v1/suppliers/tags/:tag_id?supplier_name=xxx
 
+// 我的供应商列表（聚合评论+商品）
+router.use('/my-suppliers', (await import('./my_suppliers.js')).default)                     // GET  /api/v1/suppliers/my-suppliers
+
 // 供应商创建
 router.use('/', (await import('./supplier_create.js')).default)                                          // POST /api/v1/suppliers
 

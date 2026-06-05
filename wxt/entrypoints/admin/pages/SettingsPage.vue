@@ -37,6 +37,7 @@ const pageSwitches = ref({
   enableSearchList: true,
   enableOfferList: true,
   enableHomeRecommend: true,
+  enableStopLoading: true,
 })
 
 onMounted(async () => {
@@ -49,6 +50,7 @@ onMounted(async () => {
     pageSwitches.value.enableSearchList = stored.appSettings.enableSearchList ?? true
     pageSwitches.value.enableOfferList = stored.appSettings.enableOfferList ?? true
     pageSwitches.value.enableHomeRecommend = stored.appSettings.enableHomeRecommend ?? true
+    pageSwitches.value.enableStopLoading = stored.appSettings.enableStopLoading ?? true
   }
 })
 
@@ -61,6 +63,7 @@ async function autoSave() {
     enableSearchList: pageSwitches.value.enableSearchList,
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
+    enableStopLoading: pageSwitches.value.enableStopLoading,
   }
 
   // 同步内存
@@ -68,6 +71,7 @@ async function autoSave() {
     enableSearchList: pageSwitches.value.enableSearchList,
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
+    enableStopLoading: pageSwitches.value.enableStopLoading,
   })
 
   // 保存全部
@@ -121,6 +125,10 @@ async function autoSave() {
         <el-form-item label="首页推荐">
           <el-switch v-model="pageSwitches.enableHomeRecommend" active-text="开启" inactive-text="关闭" @change="autoSave" />
           <div class="switch-desc">www.1688.com 首页推荐/精选货源卡片</div>
+        </el-form-item>
+        <el-form-item label="停止页面加载">
+          <el-switch v-model="pageSwitches.enableStopLoading" active-text="开启" inactive-text="关闭" @change="autoSave" />
+          <div class="switch-desc">进入商品详情页时自动停止页面加载（window.stop），让刷新按钮停止转圈</div>
         </el-form-item>
       </el-form>
     </el-card>

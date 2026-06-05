@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { MoreFilled, Box, User, Calendar, Check, Message } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app.js'
-import { api } from './useApi.js'
+import { api } from '../utils/useApi.js'
 
 const appStore = useAppStore()
 const version = appStore.config.app.version

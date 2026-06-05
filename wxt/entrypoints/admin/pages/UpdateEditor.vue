@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, DocumentAdd, View, Clock } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app.js'
-import { api } from './useApi.js'
+import { api } from '../utils/useApi.js'
 
 const router = useRouter()
 const appStore = useAppStore()

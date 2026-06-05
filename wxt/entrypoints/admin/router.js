@@ -2,14 +2,15 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
-  { path: '/dashboard', component: () => import('./components/Dashboard.vue'), meta: { title: '概览' } },
-  { path: '/users', component: () => import('./components/UserManage.vue'), meta: { title: '用户管理', needAdmin: true } },
-  { path: '/products', component: () => import('./components/ProductManage.vue'), meta: { title: '商品管理' } },
-  { path: '/tags', component: () => import('./components/TagManage.vue'), meta: { title: '标签管理' } },
-  { path: '/updates', component: () => import('./components/UpdateManage.vue'), meta: { title: '更新日志' } },
-  { path: '/updates/publish', component: () => import('./components/UpdateEditor.vue'), meta: { title: '发布更新', needAdmin: true } },
-  { path: '/settings', component: () => import('./components/SettingsPage.vue'), meta: { title: '系统设置' } },
-  { path: '/about', component: () => import('./components/AboutPage.vue'), meta: { title: '关于我们' } },
+  { path: '/dashboard', component: () => import('./pages/Dashboard.vue'), meta: { title: '概览' } },
+  { path: '/users', component: () => import('./pages/UserManage.vue'), meta: { title: '用户管理', needAdmin: true } },
+  { path: '/products', component: () => import('./pages/ProductManage.vue'), meta: { title: '商品管理' } },
+  { path: '/tags', component: () => import('./pages/TagManage.vue'), meta: { title: '标签管理' } },
+  { path: '/updates', component: () => import('./pages/UpdateManage.vue'), meta: { title: '更新日志' } },
+  { path: '/updates/publish', component: () => import('./pages/UpdateEditor.vue'), meta: { title: '发布更新', needAdmin: true } },
+  { path: '/suppliers', component: () => import('./pages/SupplierManage.vue'), meta: { title: '供应商管理' } },
+  { path: '/settings', component: () => import('./pages/SettingsPage.vue'), meta: { title: '系统设置' } },
+  { path: '/about', component: () => import('./pages/AboutPage.vue'), meta: { title: '关于我们' } },
 ]
 
 const router = createRouter({
