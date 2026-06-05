@@ -10,7 +10,7 @@ router.get('/', (req, res) => {
     const pageSize = parseInt(page_size) || 20
     const offset = (pageNum - 1) * pageSize
     
-    console.log('[product_mine] 用户:', user_id, '搜索:', search, search_type, '标签:', tag_id, '排序:', sort_by, sort_order, '分页:', pageNum, pageSize)
+    //console.log('[product_mine] 用户:', user_id, '搜索:', search, search_type, '标签:', tag_id, '排序:', sort_by, sort_order, '分页:', pageNum, pageSize)
 
     // 1. 获取当前用户浏览过的所有 offer_id
     let offerIds = req.db.query(
@@ -105,7 +105,7 @@ router.get('/', (req, res) => {
     const total = result.length
     const paginatedResult = result.slice(offset, offset + pageSize)
 
-    console.log('[product_mine] 返回', paginatedResult.length, '/', total, '个商品')
+   // console.log('[product_mine] 返回', paginatedResult.length, '/', total, '个商品')
     res.json({ code: 200, data: paginatedResult, total, page: pageNum, page_size: pageSize })
   } catch (error) {
     console.error(error)

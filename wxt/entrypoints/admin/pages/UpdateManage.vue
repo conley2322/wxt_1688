@@ -15,27 +15,7 @@ const productName = appStore.config.app.name
 const producer = 'Conley'
 
 const updates = ref([
-  {
-    version: '1.0.0',
-    title: '正式发布',
-    content: '<ul><li>新增商品管理瀑布流视图</li><li>支持评论图片点击放大查看</li><li>优化搜索筛选功能</li><li>修复若干已知问题</li></ul>',
-    timestamp: '2026-06-04 10:00',
-    status: 'published'
-  },
-  {
-    version: '0.9.0',
-    title: '测试版本',
-    content: '<ul><li>完成基础商品信息采集</li><li>添加标签管理功能</li><li>实现评论系统</li></ul>',
-    timestamp: '2026-05-20 14:30',
-    status: 'published'
-  },
-  {
-    version: '0.8.0',
-    title: '基础功能',
-    content: '<ul><li>项目初始化</li><li>浏览器扩展框架搭建</li><li>1688页面数据注入</li></ul>',
-    timestamp: '2026-05-01 09:00',
-    status: 'published'
-  }
+  
 ])
 
 onMounted(async () => {

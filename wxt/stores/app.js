@@ -1,5 +1,12 @@
 import { defineStore } from 'pinia'
 import { reactive, computed } from 'vue'
+import pkg from '../package.json'
+
+/**
+ * 当前扩展版本号 —— 来源于 package.json，构建时注入
+ * 需要发版时改 package.json 的 version 字段即可
+ */
+const APP_VERSION = pkg.version
 
 /**
  * 全局应用配置 Store
@@ -24,9 +31,9 @@ export const useAppStore = defineStore('app', () => {
   // ═══════════════════════════════════════════════════════════════
   const defaults = {
     app: {
-      name: 'ALOCS-1688 采购助手',
+      name: 'ALOCS-1688',
       description: '1688 商品采购管理扩展',
-      version: '0.0.0',
+      version: APP_VERSION,
     },
     settings: {
       /** 启动时自动检查更新 */
@@ -51,7 +58,7 @@ export const useAppStore = defineStore('app', () => {
     app: {
       name: defaults.app.name,
       description: defaults.app.description,
-      version: defaults.app.version,
+      version: APP_VERSION,
     },
     settings: { ...defaults.settings },
     update: {
@@ -71,15 +78,9 @@ export const useAppStore = defineStore('app', () => {
   // 3. 初始化
   // ═══════════════════════════════════════════════════════════════
 
-  /** 应用初始化：读 manifest 版本号 + 从 storage 恢复设置 */
+  /** 应用初始化：恢复用户设置 */
   async function init() {
-    // 从 manifest 读取版本号
-    try {
-      const manifest = browser.runtime.getManifest()
-      config.app.version = manifest.version || defaults.app.version
-    } catch (e) {
-      console.warn('[appStore] 无法读取 manifest 版本:', e)
-    }
+    // APP_VERSION 已在模块顶层从 package.json 注入，无需再读 manifest
 
     // 从 storage 恢复用户设置
     await _restoreSettings()

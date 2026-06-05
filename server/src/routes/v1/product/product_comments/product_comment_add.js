@@ -18,6 +18,10 @@ router.post('/', (req, res) => {
       [id, offer_id, user_id, text.trim()]
     )
 
+    // 获取商品标题用于日志
+    const product = req.db.get('SELECT title FROM products WHERE offer_id = ?', [offer_id])
+    req.logDetail = `${req.user.username} 给商品「${product?.title || offer_id}」添加了一条评论`
+
     res.json({
       code: 200,
       data: { id, text: text.trim(), created_at: new Date().toISOString() }

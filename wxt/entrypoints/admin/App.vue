@@ -26,7 +26,7 @@ onMounted(async () => {
   // 初始化应用 Store（版本号、设置等）
   await appStore.init()
   if (appStore.config.settings.autoCheckUpdate) {
-    appStore.checkUpdate()
+    await appStore.checkUpdate()
   }
   if (appStore.config.update.hasUpdate) {
     console.log(`[App] 发现新版本: ${appStore.config.update.latestVersion}`)
@@ -62,6 +62,11 @@ onMounted(async () => {
       <el-menu-item v-for="item in navItems" :key="item.path" :index="item.path">
         <el-icon><component :is="item.icon" /></el-icon>
         <span>{{ item.label }}</span>
+        <el-badge
+          v-if="item.path === '/updates' && appStore.config.update.hasUpdate"
+          is-dot
+          class="update-badge"
+        />
       </el-menu-item>
     </el-menu>
     <main class="main-content">
@@ -78,4 +83,9 @@ onMounted(async () => {
 .brand-icon { display: flex; }
 .brand-text { font-size: 16px; font-weight: 700; color: #000000; }
 .main-content { flex: 1; margin-left: 200px; padding: 24px 32px; }
+.update-badge {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
 </style>

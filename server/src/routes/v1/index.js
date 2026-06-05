@@ -13,4 +13,5 @@ router.use('/win', authenticate, (await import('./win/index.js')).default)      
 router.use('/suppliers', authenticate, (await import('./suppliers/index.js')).default) // /api/v1/suppliers/**
 router.use('/upload', authenticate, (await import('./upload/index.js')).default)         // /api/v1/upload/**
 router.use('/updates', (await import('./updates/index.js')).default)         // /api/v1/updates/**
+router.use('/operations', authenticate, (await import('./operations/index.js')).default) // /api/v1/operations/**
 export default router

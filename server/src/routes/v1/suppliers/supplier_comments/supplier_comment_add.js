@@ -31,6 +31,9 @@ router.post('/', (req, res) => {
       [id, supplier.id, user_id, text.trim()]
     )
 
+    // 告诉 logger 中间件用可读描述
+    req.logDetail = `${req.user.username} 给供应商「${supplier_name.trim()}」添加了一条评论`
+
     res.json({
       code: 200,
       data: { id, text: text.trim(), created_at: new Date().toISOString() }

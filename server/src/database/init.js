@@ -270,10 +270,9 @@ db.exec(`
 // 14. operation_logs — 操作日志
 //   id          UUID主键
 //   user_id     操作者用户ID
-//   action      操作类型 (login/logout/create/update/delete 等)
-//   target_type 操作对象类型 (product/tag/comment 等)
-//   target_id   操作对象ID
-//   detail      操作详情
+//   username    操作者用户名
+//   action      操作类型 (POST /api/xxx)
+//   detail      操作详情（可读描述，如"张三给商品CS-B17添加了评论"）
 //   ip_address  操作者IP
 //   created_at  操作时间
 // ============================================================
@@ -281,14 +280,17 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS operation_logs (
     id TEXT PRIMARY KEY,
     user_id TEXT,
+    username TEXT,
     action TEXT NOT NULL,
-    target_type TEXT,
-    target_id TEXT,
     detail TEXT,
     ip_address TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `)
+
+// 兼容旧表：补充新增字段
+try { db.exec(`ALTER TABLE operation_logs ADD COLUMN username TEXT`) } catch (e) {}
+try { db.exec(`ALTER TABLE operation_logs ADD COLUMN detail TEXT`) } catch (e) {}
 
 console.log('Database initialized successfully — 16 tables created')
 
@@ -321,35 +323,7 @@ if (adminUser) {
     insertUser.run(u.username, u.email, u.password)
   }
 
-  // --- 产品更新日志 ---
-  const insertUpdate = db.prepare(`
-    INSERT INTO product_updates (id, version, title, content, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `)
-  insertUpdate.run(
-    generateId(),
-    '1.0.0',
-    '正式发布',
-    '<ul><li>新增商品管理瀑布流视图</li><li>支持评论图片点击放大查看</li><li>优化搜索筛选功能</li><li>修复若干已知问题</li></ul>',
-    'published',
-    '2026-06-04 10:00:00'
-  )
-  insertUpdate.run(
-    generateId(),
-    '0.9.0',
-    '测试版本',
-    '<ul><li>实现商品评论功能</li><li>添加标签系统</li><li>创建浏览记录</li></ul>',
-    'published',
-    '2026-05-20 15:30:00'
-  )
-  insertUpdate.run(
-    generateId(),
-    '0.8.0',
-    '基础功能',
-    '<ul><li>用户登录注册</li><li>商品数据采集</li><li>供应商管理</li></ul>',
-    'published',
-    '2026-05-01 09:00:00'
-  )
+ 
 
   console.log('Seed data inserted (users + updates)')
 }

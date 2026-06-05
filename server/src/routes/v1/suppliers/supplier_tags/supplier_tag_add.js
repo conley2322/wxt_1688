@@ -41,6 +41,9 @@ router.post('/', (req, res) => {
       [id, supplier.id, tag_id, user_id]
     )
 
+    const tagInfo = req.db.get('SELECT text FROM tags WHERE id = ?', [tag_id])
+    req.logDetail = `${req.user.username} 给供应商「${supplier_name.trim()}」添加了标签「${tagInfo?.text || tag_id}」`
+
     res.json({ code: 200, message: '标签已添加' })
   } catch (error) {
     console.error(error)

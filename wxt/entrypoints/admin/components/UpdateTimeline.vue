@@ -22,6 +22,7 @@ defineProps({
         <div class="timeline-card-header">
           <div class="timeline-version">
             <span class="timeline-version-num">v{{ item.version }}</span>{{ item.title }}
+            <span v-if="index === 0" class="latest-tag">最新版本</span>
           </div>
           <span :class="['timeline-status', item.status]">
             {{ item.status === 'published' ? '已发布' : '草稿' }}
@@ -142,6 +143,19 @@ defineProps({
   font-weight: 500;
   color: #9ca3af;
   margin-right: 4px;
+}
+
+.latest-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1, #818cf8);
+  padding: 2px 8px;
+  border-radius: 100px;
+  margin-left: 8px;
+  vertical-align: middle;
+  letter-spacing: 0.3px;
 }
 
 .timeline-status {
