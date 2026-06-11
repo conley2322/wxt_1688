@@ -130,16 +130,23 @@ export function useWindowDrag(options) {
   function minimize() {
     isDotMode.value = true
     windowSize.value = { width: dotSize, height: dotSize }
+    browser.storage.local.set({ winDotMode: true })
   }
 
   function restore() {
     isDotMode.value = false
-    windowSize.value = { width: initialWidth, height: initialHeight }
+    // 从 winFullSize 恢复展开模式尺寸（不会被小圆标尺寸覆盖）
+    browser.storage.local.get(['winFullSize']).then(stored => {
+      windowSize.value = (stored.winFullSize && stored.winFullSize.width >= minWidth)
+        ? stored.winFullSize
+        : { width: initialWidth, height: initialHeight }
+      browser.storage.local.set({ winDotMode: false, winSize: windowSize.value })
+    })
   }
 
   // ── 持久化 ───────────────────────────────────────────
   async function restorePosition() {
-    const stored = await browser.storage.local.get(['winPosition', 'winSize', 'winDotMode'])
+    const stored = await browser.storage.local.get(['winPosition', 'winSize', 'winFullSize', 'winDotMode'])
     if (stored.winPosition) position.value = stored.winPosition
     if (stored.winDotMode === true) {
       isDotMode.value = true
@@ -147,15 +154,23 @@ export function useWindowDrag(options) {
     } else if (stored.winSize) {
       windowSize.value = stored.winSize
     }
+    // 兜底：如果 winFullSize 不存在，用初始值
+    if (!stored.winFullSize) {
+      browser.storage.local.set({ winFullSize: { width: initialWidth, height: initialHeight } })
+    }
   }
 
   async function savePosition() {
-    if (isDotMode.value) return
-    await browser.storage.local.set({
-      winPosition: position.value,
-      winSize: windowSize.value,
-      winDotMode: false,
-    })
+    const payload = { winPosition: position.value, winDotMode: isDotMode.value }
+    if (isDotMode.value) {
+      // 小圆标模式：只存位置和标记，不覆盖展开尺寸
+      payload.winSize = { width: dotSize, height: dotSize }
+    } else {
+      // 展开模式：同时保存 winSize 和 winFullSize（后者用于 restore 专用）
+      payload.winSize = windowSize.value
+      payload.winFullSize = windowSize.value
+    }
+    await browser.storage.local.set(payload)
   }
 
   // ── 生命周期 ─────────────────────────────────────────

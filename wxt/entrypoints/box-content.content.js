@@ -3,7 +3,7 @@ import { createPinia } from 'pinia'
 import App from '../entrypoints/box/App.vue'
 
 export default defineContentScript({
-  matches: ['*://s.1688.com/selloffer/*', '*://search.1688.com/selloffer/*', '*://www.1688.com/*'],
+  matches: ['*://s.1688.com/*/*', '*://search.1688.com/selloffer/*', '*://www.1688.com/*'],
 
   main() {
     // ── 检查登录状态 ──
