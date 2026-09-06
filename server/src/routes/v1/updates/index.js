@@ -1,4 +1,6 @@
 import { Router } from 'express'
+import { authenticate } from '../../../middlewares/auth/index.js'
+
 const router = Router()
 
 router.get('/', async (req, res) => {
@@ -42,9 +44,9 @@ router.get('/all', async (req, res) => {
   }
 })
 
-router.post('/', async (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const { version, title, content, status = 'draft' } = req.body
-  
+
   if (!version || !title || !content) {
     return res.status(400).json({
       code: 400,
@@ -55,9 +57,9 @@ router.post('/', async (req, res) => {
   try {
     const id = crypto.randomUUID()
     await req.db.run(`
-      INSERT INTO product_updates (id, version, title, content, status)
-      VALUES (?, ?, ?, ?, ?)
-    `, [id, version, title, content, status])
+      INSERT INTO product_updates (id, version, title, content, status, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+    `, [id, version, title, content, status, req.user.username])
 
     res.json({
       code: 200,
@@ -73,7 +75,7 @@ router.post('/', async (req, res) => {
   }
 })
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', authenticate, async (req, res) => {
   const { id } = req.params
   const { version, title, content, status } = req.body
 
@@ -93,7 +95,8 @@ router.put('/:id', async (req, res) => {
     if (title) { updates.push('title = ?'); params.push(title) }
     if (content) { updates.push('content = ?'); params.push(content) }
     if (status) { updates.push('status = ?'); params.push(status) }
-    updates.push('updated_at = CURRENT_TIMESTAMP')
+    updates.push('updated_by = ?'); params.push(req.user.username)
+    updates.push(`updated_at = datetime('now', 'localtime')`)
 
     await req.db.run(`
       UPDATE product_updates SET ${updates.join(', ')} WHERE id = ?

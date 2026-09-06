@@ -17,16 +17,17 @@ router.post('/', (req, res) => {
     const uniqueIds = [...new Set(offer_ids)]
 
     // 真实查询计数：本接口每被真实调用一次（前端缓存未命中才会发起），
-    // 对请求中的每个商品 +1，并记录最后查询时间（本地时间，精确到秒）。
-    // 独立统计表，商品未入库也计数；与浏览/评论/标签数据一起返回。
+    // 按 (商品, 用户) 各 +1。独立统计表，商品未入库也计数；总次数与我的次数随其他数据一起返回。
+    // prev_queried_at 沉降上一次查询时间：首次查询为空，之后每次查询把旧 last_queried_at 存入
     for (const id of uniqueIds) {
       req.db.run(
-        `INSERT INTO product_query_stats (offer_id, query_count, last_queried_at)
-         VALUES (?, 1, datetime('now', 'localtime'))
-         ON CONFLICT(offer_id) DO UPDATE SET
+        `INSERT INTO product_query_stats (offer_id, user_id, query_count, last_queried_at)
+         VALUES (?, ?, 1, datetime('now', 'localtime'))
+         ON CONFLICT(offer_id, user_id) DO UPDATE SET
            query_count = query_count + 1,
+           prev_queried_at = product_query_stats.last_queried_at,
            last_queried_at = datetime('now', 'localtime')`,
-        [id]
+        [id, user_id]
       )
     }
 
@@ -49,9 +50,25 @@ router.post('/', (req, res) => {
       uniqueIds
     )
 
-    // 批量查被查询次数 + 最后查询时间
-    const queryCounts = req.db.query(
-      `SELECT offer_id, query_count AS count, last_queried_at FROM product_query_stats WHERE offer_id IN (${placeholders})`,
+    // 批量查被查询次数：总次数（全团队求和）+ 查询用户列表（头像栈，标记 is_me）
+    // last_queried_at 输出为"应展示的查询时间"：商品只被查过 1 次 → 本次时间；查过多次 → 上一次时间
+    //   （排除当前用户本次查询：当前用户取其 prev_queried_at，其他用户取各自最后查询时间，取最大）
+    const queryTotals = req.db.query(
+      `SELECT offer_id, SUM(query_count) AS count,
+              CASE WHEN SUM(query_count) <= 1
+                   THEN MAX(last_queried_at)
+                   ELSE MAX(CASE WHEN user_id = ? THEN prev_queried_at ELSE last_queried_at END)
+              END AS last_queried_at
+       FROM product_query_stats
+       WHERE offer_id IN (${placeholders}) GROUP BY offer_id`,
+      [user_id, ...uniqueIds]
+    )
+    const queryUsers = req.db.query(
+      `SELECT qs.offer_id, u.username, u.avatar_color, qs.query_count AS count, qs.last_queried_at
+       FROM product_query_stats qs
+       JOIN users u ON qs.user_id = u.id
+       WHERE qs.offer_id IN (${placeholders})
+       ORDER BY qs.offer_id, count DESC`,
       uniqueIds
     )
 
@@ -79,20 +96,32 @@ router.post('/', (req, res) => {
       const vc = viewCounts.find(r => r.offer_id === id)
       const cc = commentCounts.find(r => r.offer_id === id)
       const tc = tagCounts.find(r => r.offer_id === id)
-      const qc = queryCounts.find(r => r.offer_id === id)
+      const qt = queryTotals.find(r => r.offer_id === id)
       const vs = viewers.filter(r => r.offer_id === id).map(v => ({
         username: v.username,
         initial: v.username.charAt(0),
         avatar_color: v.avatar_color || null,
         count: v.count
       }))
+      // 查询用户列表（标记 is_me 供前端"仅我的次数"模式显示自己头像；last_queried_at 供时间轴展示）
+      const qu = queryUsers.filter(r => r.offer_id === id).map(v => ({
+        username: v.username,
+        initial: v.username.charAt(0),
+        avatar_color: v.avatar_color || null,
+        count: v.count,
+        last_queried_at: v.last_queried_at || null,
+        is_me: v.username === req.user.username
+      }))
+      const mine = qu.find(u => u.is_me)
 
       result[id] = {
         view_count: vc ? vc.count : 0,
         comment_count: cc ? cc.count : 0,
         tag_count: tc ? tc.count : 0,
-        query_count: qc ? (qc.count || 0) : 0,
-        last_queried_at: qc ? (qc.last_queried_at || null) : null,
+        query_count: qt ? (qt.count || 0) : 0,
+        my_query_count: mine ? mine.count : 0,
+        last_queried_at: qt ? qt.last_queried_at || null : null,
+        query_users: qu,
         viewers: vs,
         i_have_viewed: myViewSet.has(id)
       }

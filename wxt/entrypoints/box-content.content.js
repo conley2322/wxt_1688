@@ -2,8 +2,8 @@ import { createApp, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import App from '../entrypoints/box/App.vue'
 
-// 列表页域名：搜索结果 / 货源列表 / 首页（原有 renderConfigs 规则）
-const LIST_HOSTS = ['s.1688.com', 'search.1688.com', 'www.1688.com']
+// 列表页域名：搜索结果 / 货源列表 / 首页 / 以图搜图（renderConfigs 选择器规则）
+const LIST_HOSTS = ['s.1688.com', 'search.1688.com', 'www.1688.com', 'air.1688.com']
 // 详情页由 win-content.content.js 负责，box 不参与
 const DETAIL_HOST = 'detail.1688.com'
 
@@ -66,6 +66,11 @@ export default defineContentScript({
 
     // 共享的批量数据缓存
     const batchCache = reactive({})
+
+    // box1 查询次数显示模式：total=全团队总次数（默认）/ mine=仅我的次数（后台设置）
+    let queryCountMode = 'total'
+    // box1 图表类型：bar=柱状图（默认）/ line=折线图（后台设置）
+    let box1ChartType = 'bar'
 
     // ── 批量请求（指纹去重：同一次页面会话内相同的 offer_ids 集合不重复请求）──
     // 每次页面加载/翻页新看到的商品都会发起真实查询，后端逐次 +1 被查询次数
@@ -145,7 +150,9 @@ export default defineContentScript({
       const app = createApp(App, {
         parentEl: item,
         offerId,
-        batchCache
+        batchCache,
+        queryCountMode,
+        chartType: box1ChartType
       })
       app.use(pinia)
       app.mount(container)
@@ -172,6 +179,7 @@ export default defineContentScript({
     // 组件会注入到每个 parent 下的 child 里面
     const renderConfigs = [
       { parent: '.feeds-wrapper', child: '> a' },
+      // 货源列表 / 以图搜图页（air.1688.com/kapp/1688-search/pc-image-search，卡片为 searchOfferWrapper--xxx）
       { parent: '[class*="offerListLayoutWrapper"]', child: '[class*="searchOfferWrapper"]' },
       // 首页推荐/精选货源：卡片本身是 .offer-card-container，offerId 在 data-aplus-report 属性里
       { parent: '.swiper-slide .list-padding', child: '.offer-card-container' },
@@ -238,7 +246,9 @@ export default defineContentScript({
           s.enableOfferList !== false ? renderConfigs[1] : null,
           s.enableHomeRecommend !== false ? renderConfigs[2] : null,
         ].filter(Boolean)
-        console.log(`[box:list] 渲染开关: search=${s.enableSearchList !== false}, offerList=${s.enableOfferList !== false}, home=${s.enableHomeRecommend !== false} → 生效配置 ${cfgs.map(c => c.parent).join(' / ') || '无'}`)
+        queryCountMode = s.queryCountDisplay === 'mine' ? 'mine' : 'total'
+        box1ChartType = s.box1ChartType === 'line' ? 'line' : 'bar'
+        console.log(`[box:list] 渲染开关: search=${s.enableSearchList !== false}, offerList=${s.enableOfferList !== false}, home=${s.enableHomeRecommend !== false} → 生效配置 ${cfgs.map(c => c.parent).join(' / ') || '无'}；查询次数显示: ${queryCountMode}；box1图表: ${box1ChartType}`)
       } catch (e) {
         console.error('[box:list] 读取设置失败:', e)
       }
@@ -270,13 +280,16 @@ export default defineContentScript({
 
       scanCount++
 
-      // 店铺页渲染开关
+      // 店铺页渲染开关 + 查询次数显示模式
       try {
         const stored = await browser.storage.local.get('appSettings')
-        if (stored.appSettings?.enableShopPage === false) {
+        const s = stored.appSettings || {}
+        if (s.enableShopPage === false) {
           if (scanCount === 1) console.log('[box:shop] 店铺页渲染已被设置关闭（enableShopPage=false），不注入')
           return
         }
+        queryCountMode = s.queryCountDisplay === 'mine' ? 'mine' : 'total'
+        box1ChartType = s.box1ChartType === 'line' ? 'line' : 'bar'
       } catch (e) {
         console.error('[box:shop] 读取设置失败:', e)
       }

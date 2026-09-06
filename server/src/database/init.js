@@ -291,19 +291,30 @@ db.exec(`
 `)
 
 // ============================================================
-// 15. product_query_stats — 商品被查询次数
+// 15. product_query_stats — 商品被查询次数（按用户）
 //    独立于 products 表：列表页商品未入库（没人点开过详情页）也照样计数
-//   offer_id        1688商品ID（主键）
-//   query_count     被查询次数（batch_info 真实查询 +1，前端缓存命中不计数）
-//   last_queried_at 最后查询时间
+//   offer_id        1688商品ID
+//   user_id         查询用户ID（每个用户各自计数）
+//   query_count     该用户对该商品的查询次数（batch_info 真实查询 +1）
+//   last_queried_at 最后（本次）查询时间
+//   prev_queried_at 上一次查询时间（每次查询时由 last_queried_at 沉降而来）
 // ============================================================
+// 旧表无 user_id 字段（早期全局计数，无法按人拆分）→ 重建
+const _qsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'product_query_stats'").get()
+if (_qsTable && !_qsTable.sql.includes('user_id')) {
+  db.exec('DROP TABLE product_query_stats')
+}
 db.exec(`
   CREATE TABLE IF NOT EXISTS product_query_stats (
-    offer_id TEXT PRIMARY KEY,
+    offer_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     query_count INTEGER DEFAULT 0,
-    last_queried_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    last_queried_at DATETIME,
+    prev_queried_at DATETIME,
+    PRIMARY KEY (offer_id, user_id)
   )
 `)
+try { db.exec(`ALTER TABLE product_query_stats ADD COLUMN prev_queried_at DATETIME`) } catch (e) {}
 
 // 兼容旧表：补充新增字段
 try { db.exec(`ALTER TABLE operation_logs ADD COLUMN username TEXT`) } catch (e) {}
@@ -311,6 +322,9 @@ try { db.exec(`ALTER TABLE operation_logs ADD COLUMN detail TEXT`) } catch (e) {
 try { db.exec(`ALTER TABLE users ADD COLUMN avatar_color TEXT`) } catch (e) {}
 // 商品被查询次数（插件真实查询 batch_info 时 +1，前端缓存命中不计数）
 try { db.exec(`ALTER TABLE products ADD COLUMN query_count INTEGER DEFAULT 0`) } catch (e) {}
+// 更新记录操作人（时间轴显示"某某某 更新了 xxx"）
+try { db.exec(`ALTER TABLE product_updates ADD COLUMN created_by TEXT`) } catch (e) {}
+try { db.exec(`ALTER TABLE product_updates ADD COLUMN updated_by TEXT`) } catch (e) {}
 
 console.log('Database initialized successfully — 16 tables created')
 
@@ -342,6 +356,15 @@ if (adminUser) {
   for (const u of extraUsers) {
     insertUser.run(u.username, u.email, u.password)
   }
+
+  // 首个版本更新记录（时间轴展示）
+  db.prepare(`
+    INSERT INTO product_updates (id, version, title, content, status, created_by, created_at)
+    VALUES (?, 'v0.1.0', '店铺页插件支持 + 查询次数统计 + 供应商分页', ?, 'published', 'conley2322', datetime('now', 'localtime'))
+  `).run(
+    crypto.randomUUID(),
+    '<ul><li>前端：供应商管理分页；店铺页（首页/全部商品页）支持插件；新增 box1 查询次数与最后查询时间</li><li>后端：供应商列表分页；商品查询次数统计</li></ul>'
+  )
 
  
 

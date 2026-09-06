@@ -5,6 +5,15 @@ defineProps({
     default: () => []
   }
 })
+
+// SQLite 存的是本地时间字符串 "YYYY-MM-DD HH:mm:ss"
+function formatDateTime(s) {
+  if (!s) return ''
+  const d = new Date(String(s).replace(' ', 'T'))
+  if (isNaN(d.getTime())) return String(s)
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 </script>
 
 <template>
@@ -30,7 +39,11 @@ defineProps({
         </div>
         <div class="timeline-content" v-html="item.content"></div>
         <div class="timeline-card-footer">
-          {{ item.timestamp }}
+          <span class="timeline-author">{{ item.created_by || '佚名' }}</span>
+          发布于 {{ formatDateTime(item.created_at) }}
+          <span v-if="item.updated_by" class="timeline-updated">
+            · {{ item.updated_by }} 编辑于 {{ formatDateTime(item.updated_at) }}
+          </span>
         </div>
       </div>
     </div>
@@ -208,6 +221,15 @@ defineProps({
 .timeline-card-footer {
   margin-top: 12px;
   font-size: 12px;
+  color: #9ca3af;
+}
+
+.timeline-author {
+  color: #4b5563;
+  font-weight: 600;
+}
+
+.timeline-updated {
   color: #9ca3af;
 }
 </style>

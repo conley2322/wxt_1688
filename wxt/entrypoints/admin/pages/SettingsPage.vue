@@ -41,6 +41,11 @@ const pageSwitches = ref({
   enableStopLoading: true,
 })
 
+// box1 查询次数显示模式：total=全团队总次数 / mine=仅我的次数
+const queryCountDisplay = ref('total')
+// box1 图表类型：bar=柱状图 / line=折线图
+const box1ChartType = ref('bar')
+
 onMounted(async () => {
   const stored = await browser.storage.local.get(['boxDefault', 'serverAddress', 'toolbarConfig', 'appSettings'])
   if (stored.boxDefault) boxDefault.value = stored.boxDefault
@@ -53,6 +58,8 @@ onMounted(async () => {
     pageSwitches.value.enableHomeRecommend = stored.appSettings.enableHomeRecommend ?? true
     pageSwitches.value.enableShopPage = stored.appSettings.enableShopPage ?? true
     pageSwitches.value.enableStopLoading = stored.appSettings.enableStopLoading ?? true
+    queryCountDisplay.value = stored.appSettings.queryCountDisplay ?? 'total'
+    box1ChartType.value = stored.appSettings.box1ChartType ?? 'bar'
   }
 })
 
@@ -66,6 +73,8 @@ async function autoSave() {
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
     enableShopPage: pageSwitches.value.enableShopPage,
+    queryCountDisplay: queryCountDisplay.value,
+    box1ChartType: box1ChartType.value,
     enableStopLoading: pageSwitches.value.enableStopLoading,
   }
 
@@ -75,6 +84,8 @@ async function autoSave() {
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
     enableShopPage: pageSwitches.value.enableShopPage,
+    queryCountDisplay: queryCountDisplay.value,
+    box1ChartType: box1ChartType.value,
     enableStopLoading: pageSwitches.value.enableStopLoading,
   })
 
@@ -133,6 +144,20 @@ async function autoSave() {
         <el-form-item label="供应商店铺页">
           <el-switch v-model="pageSwitches.enableShopPage" active-text="开启" inactive-text="关闭" @change="autoSave" />
           <div class="switch-desc">shop***.1688.com 供应商店铺首页 / 全部商品(offerlist)页</div>
+        </el-form-item>
+        <el-form-item label="查询次数显示">
+          <el-radio-group v-model="queryCountDisplay" @change="autoSave">
+            <el-radio-button value="total">全团队总次数</el-radio-button>
+            <el-radio-button value="mine">仅我的次数</el-radio-button>
+          </el-radio-group>
+          <div class="switch-desc">商品卡片 box1 显示的查询次数：全团队总次数（默认）或仅我自己查询的次数</div>
+        </el-form-item>
+        <el-form-item label="box1 图表样式">
+          <el-radio-group v-model="box1ChartType" @change="autoSave">
+            <el-radio-button value="bar">柱状图</el-radio-button>
+            <el-radio-button value="line">折线图</el-radio-button>
+          </el-radio-group>
+          <div class="switch-desc">商品卡片 box1 中"谁查询了多少次"的图表样式（刷新 1688 页面后生效）</div>
         </el-form-item>
         <el-form-item label="停止页面加载">
           <el-switch v-model="pageSwitches.enableStopLoading" active-text="开启" inactive-text="关闭" @change="autoSave" />

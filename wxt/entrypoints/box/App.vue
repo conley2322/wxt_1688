@@ -1,7 +1,14 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import * as echarts from 'echarts/core'
+import { LineChart, BarChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 
-const props = defineProps(['parentEl', 'offerId', 'batchCache'])
+// box1 图表按需引入（减小打包体积）
+echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
+
+const props = defineProps(['parentEl', 'offerId', 'batchCache', 'queryCountMode', 'chartType'])
 
 // 父元素自适应
 if (props.parentEl) {
@@ -28,8 +35,29 @@ const info = computed(() => props.batchCache?.[offer_id] || null)
 const viewCount = computed(() => info.value?.view_count ?? 0)
 const commentCount = computed(() => info.value?.comment_count ?? 0)
 const tagCount = computed(() => info.value?.tag_count ?? 0)
-const queryCount = computed(() => info.value?.query_count ?? 0)
+const queryCount = computed(() => props.queryCountMode === 'mine'
+  ? (info.value?.my_query_count ?? 0)
+  : (info.value?.query_count ?? 0))
 const lastQueriedAt = computed(() => info.value?.last_queried_at || '')
+
+// box1 头像：mine 模式显示我自己的头像，total 模式显示团队所有查询用户的头像栈
+const queryUsers = computed(() => info.value?.query_users || [])
+const box1Avatars = computed(() => {
+  if (props.queryCountMode === 'mine') {
+    const me = queryUsers.value.find(u => u.is_me)
+    if (!me) return []
+    return [{
+      initial: me.initial || me.username?.charAt(0) || '?',
+      color: avatarColor(me),
+      tooltip: `${me.username} · ${me.count}次`
+    }]
+  }
+  return queryUsers.value.map(v => ({
+    initial: v.initial || v.username?.charAt(0) || '?',
+    color: avatarColor(v),
+    tooltip: `${v.username} · ${v.count}次`
+  }))
+})
 
 // 时间显示规则：今天→时分秒；本月→「日日 时分秒」；今年→「月-日 时分秒」；跨年→完整日期
 function formatQueryTime(s) {
@@ -48,6 +76,107 @@ function formatQueryTime(s) {
 }
 const lastQueriedAtText = computed(() => formatQueryTime(lastQueriedAt.value))
 const iHaveViewed = computed(() => info.value?.i_have_viewed ?? false)
+
+// ── box1 视图切换：chart=查询次数图表 / time=最近一周查询时间轴 ──
+const view = ref('chart')
+
+// 时间轴数据：最近一周查询过的用户，按时间倒序，友好时间（今天/昨天/周几 + 时段）
+const timelineItems = computed(() => {
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+  return queryUsers.value
+    .filter(u => u.last_queried_at)
+    .map(u => {
+      const d = new Date(String(u.last_queried_at).replace(' ', 'T'))
+      if (isNaN(d.getTime())) return null
+      const diffDays = Math.floor((startOfToday - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86400000)
+      if (diffDays < 0 || diffDays > 7) return null
+      const pad = n => String(n).padStart(2, '0')
+      const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+      const hour = d.getHours()
+      const period = hour < 6 ? '凌晨' : hour < 12 ? '上午' : hour < 18 ? '下午' : '晚上'
+      let time
+      if (diffDays === 0) time = `今天 ${period} ${hm}`
+      else if (diffDays === 1) time = `昨天 ${period} ${hm}`
+      else time = `${weekdays[d.getDay()]} ${period} ${hm}`
+      return {
+        username: u.username,
+        initial: u.initial || u.username?.charAt(0) || '?',
+        color: avatarColor(u),
+        count: u.count,
+        time,
+        ts: d.getTime()
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.ts - a.ts)
+})
+
+// 切回次数视图时图表容器重新挂载，需重新初始化 ECharts
+watch(view, v => {
+  if (v === 'chart') {
+    chartInstance?.dispose()
+    chartInstance = null
+    nextTick(renderChart)
+  }
+})
+
+// ── box1 图表：谁查询了多少次（柱状图/折线图，后台设置切换）──
+const chartEl = ref(null)
+let chartInstance = null
+
+function renderChart() {
+  if (!chartEl.value || !queryUsers.value.length) return
+  if (!chartInstance) {
+    chartInstance = echarts.init(chartEl.value)
+  }
+  const isLine = props.chartType === 'line'
+  const users = [...queryUsers.value].sort((a, b) => b.count - a.count).slice(0, 8)
+  const seriesColor = isLine ? '#c9975c' : '#8faedd'
+  chartInstance.setOption({
+    grid: { left: 30, right: 8, top: 14, bottom: 20 },
+    tooltip: {
+      trigger: 'axis',
+      textStyle: { fontSize: 11 },
+      formatter: p => `${p[0].data.fullName}：${p[0].value} 次`
+    },
+    xAxis: {
+      type: 'category',
+      data: users.map(u => u.initial),
+      axisLabel: { fontSize: 9, interval: 0, color: '#9ca3af' },
+      axisLine: { lineStyle: { color: '#e5e7eb' } },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      axisLabel: { fontSize: 9, color: '#9ca3af' },
+      splitLine: { lineStyle: { color: '#f3f4f6' } }
+    },
+    series: [{
+      type: isLine ? 'line' : 'bar',
+      data: users.map(u => ({
+        value: u.count,
+        fullName: u.username,
+        itemStyle: {
+          color: u.is_me ? '#c9975c' : seriesColor,
+          ...(isLine ? {} : { borderRadius: [3, 3, 0, 0] })
+        }
+      })),
+      barMaxWidth: 16,
+      smooth: true,
+      symbolSize: 5,
+      lineStyle: { width: 2, color: '#c9975c' },
+      itemStyle: isLine ? { color: '#c9975c' } : {}
+    }]
+  }, true)
+}
+
+onMounted(() => nextTick(renderChart))
+onUnmounted(() => { chartInstance?.dispose(); chartInstance = null })
+watch(() => info.value?.query_users, () => nextTick(renderChart))
+watch(() => props.chartType, () => nextTick(renderChart))
 
 // 头像颜色（用户自选 > 哈希降级）
 const colorPool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
@@ -114,14 +243,39 @@ const dotColor = computed(() => {
       </div>
     </div>
 
-    <!-- box1：被查询次数（每次实际查询 +1）+ 最后查询时间（精确到秒） -->
+    <!-- box1：被查询次数图表 / 最近一周查询时间轴（卡片内 [次数|时间] 切换） -->
     <div class="box-card box1-card">
       <div class="box-row">
-        <span class="box-stat box1-stat" title="被查询次数：每次实际查询该商品信息都会 +1">
+        <span class="box-stat box1-stat" :title="queryCountMode === 'mine' ? '我查询该商品信息的次数（每次实际查询 +1）' : '全团队查询该商品信息的总次数（每次实际查询 +1）'">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          查询 {{ queryCount }} 次
+          {{ queryCountMode === 'mine' ? '我查' : '查询' }} {{ queryCount }} 次
         </span>
-        <span v-if="lastQueriedAtText" class="box1-time" :title="'最后查询时间：' + lastQueriedAt">{{ lastQueriedAtText }}</span>
+        <span v-if="box1Avatars.length" class="avatar-stack box1-avatars">
+          <span
+            v-for="(v, i) in box1Avatars.slice(0, 3)"
+            :key="i"
+            class="avatar-dot"
+            :style="{ background: v.color, zIndex: box1Avatars.length - i }"
+            :title="v.tooltip"
+          >{{ v.initial }}</span>
+          <span v-if="box1Avatars.length > 3" class="avatar-more">+{{ box1Avatars.length - 3 }}</span>
+        </span>
+        <div class="box1-tabs">
+          <button :class="{ active: view === 'chart' }" title="谁查询了多少次" @click="view = 'chart'">次数</button>
+          <button :class="{ active: view === 'time' }" title="最近一周谁查询过" @click="view = 'time'">时间</button>
+        </div>
+      </div>
+      <template v-if="view === 'chart'">
+        <div v-if="lastQueriedAtText" class="box1-sub">上次查询：{{ lastQueriedAtText }}</div>
+        <div ref="chartEl" class="box1-chart"></div>
+      </template>
+      <div v-else class="box1-timeline">
+        <div v-if="!timelineItems.length" class="box1-timeline-empty">最近一周暂无查询记录</div>
+        <div v-for="(t, i) in timelineItems" :key="i" class="box1-timeline-item" :title="`${t.username} 查询了 ${t.count} 次`">
+          <span class="avatar-dot" :style="{ background: t.color }">{{ t.initial }}</span>
+          <span class="tl-name">{{ t.username }}</span>
+          <span class="tl-time">{{ t.time }}</span>
+        </div>
       </div>
     </div>
   </template>
@@ -164,7 +318,17 @@ const dotColor = computed(() => {
   opacity: 0.5;
   flex-shrink: 0;
 }
-/* ── box1：被查询次数 ── */
+/* ── box1：被查询次数 + 图表 ── */
+.box1-card {
+  height: auto;
+  padding: 6px 8px 2px;
+  display: block;
+}
+.box1-chart {
+  width: 100%;
+  height: 104px;
+  margin-top: 2px;
+}
 .box1-stat {
   color: #c9975c;
   font-weight: 600;
@@ -172,11 +336,74 @@ const dotColor = computed(() => {
 .box1-stat svg {
   opacity: 0.9;
 }
-.box1-time {
+.box1-tabs {
   margin-left: auto;
+  display: flex;
+  flex-shrink: 0;
+}
+.box1-tabs button {
   font-size: 10px;
-  color: #bbb;
+  padding: 1px 7px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #9ca3af;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.5;
+}
+.box1-tabs button:first-child { border-radius: 4px 0 0 4px; }
+.box1-tabs button:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+.box1-tabs button.active {
+  color: #fff;
+  background: #c9975c;
+  border-color: #c9975c;
+}
+.box1-sub {
+  font-size: 10px;
+  color: #9ca3af;
+  margin: 2px 0 0;
+}
+.box1-timeline {
+  max-height: 104px;
+  overflow-y: auto;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 2px;
+}
+.box1-timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.box1-timeline-item .avatar-dot {
+  width: 16px;
+  height: 16px;
+  font-size: 8px;
+  flex-shrink: 0;
+}
+.tl-name {
+  color: #4b5563;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.tl-time {
+  color: #9ca3af;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.box1-timeline-empty {
+  font-size: 11px;
+  color: #c0c4cc;
+  text-align: center;
+  padding: 30px 0;
+}
+.box1-avatars {
+  margin-left: 2px;
 }
 /* ── 头像栈 ── */
 .avatar-stack { display: flex; align-items: center; flex-shrink: 0; }
