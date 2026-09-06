@@ -43,3 +43,12 @@ server/*.pem
 server/.cert-info.json
 server/uploads/
 
+
+# AI 工具本地产物（勿提交）
+.agents/
+.codegraph/
+.reasonix/
+.superpowers/
+_temp/
+skills-lock.json
+.claude/settings.local.json
