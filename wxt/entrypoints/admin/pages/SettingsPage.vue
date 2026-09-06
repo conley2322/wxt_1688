@@ -37,6 +37,7 @@ const pageSwitches = ref({
   enableSearchList: true,
   enableOfferList: true,
   enableHomeRecommend: true,
+  enableShopPage: true,
   enableStopLoading: true,
 })
 
@@ -50,6 +51,7 @@ onMounted(async () => {
     pageSwitches.value.enableSearchList = stored.appSettings.enableSearchList ?? true
     pageSwitches.value.enableOfferList = stored.appSettings.enableOfferList ?? true
     pageSwitches.value.enableHomeRecommend = stored.appSettings.enableHomeRecommend ?? true
+    pageSwitches.value.enableShopPage = stored.appSettings.enableShopPage ?? true
     pageSwitches.value.enableStopLoading = stored.appSettings.enableStopLoading ?? true
   }
 })
@@ -63,6 +65,7 @@ async function autoSave() {
     enableSearchList: pageSwitches.value.enableSearchList,
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
+    enableShopPage: pageSwitches.value.enableShopPage,
     enableStopLoading: pageSwitches.value.enableStopLoading,
   }
 
@@ -71,6 +74,7 @@ async function autoSave() {
     enableSearchList: pageSwitches.value.enableSearchList,
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
+    enableShopPage: pageSwitches.value.enableShopPage,
     enableStopLoading: pageSwitches.value.enableStopLoading,
   })
 
@@ -125,6 +129,10 @@ async function autoSave() {
         <el-form-item label="首页推荐">
           <el-switch v-model="pageSwitches.enableHomeRecommend" active-text="开启" inactive-text="关闭" @change="autoSave" />
           <div class="switch-desc">www.1688.com 首页推荐/精选货源卡片</div>
+        </el-form-item>
+        <el-form-item label="供应商店铺页">
+          <el-switch v-model="pageSwitches.enableShopPage" active-text="开启" inactive-text="关闭" @change="autoSave" />
+          <div class="switch-desc">shop***.1688.com 供应商店铺首页 / 全部商品(offerlist)页</div>
         </el-form-item>
         <el-form-item label="停止页面加载">
           <el-switch v-model="pageSwitches.enableStopLoading" active-text="开启" inactive-text="关闭" @change="autoSave" />

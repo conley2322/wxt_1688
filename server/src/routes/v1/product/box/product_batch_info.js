@@ -16,6 +16,20 @@ router.post('/', (req, res) => {
     // 去重
     const uniqueIds = [...new Set(offer_ids)]
 
+    // 真实查询计数：本接口每被真实调用一次（前端缓存未命中才会发起），
+    // 对请求中的每个商品 +1，并记录最后查询时间（本地时间，精确到秒）。
+    // 独立统计表，商品未入库也计数；与浏览/评论/标签数据一起返回。
+    for (const id of uniqueIds) {
+      req.db.run(
+        `INSERT INTO product_query_stats (offer_id, query_count, last_queried_at)
+         VALUES (?, 1, datetime('now', 'localtime'))
+         ON CONFLICT(offer_id) DO UPDATE SET
+           query_count = query_count + 1,
+           last_queried_at = datetime('now', 'localtime')`,
+        [id]
+      )
+    }
+
     // 批量查浏览统计
     const placeholders = uniqueIds.map(() => '?').join(',')
     const viewCounts = req.db.query(
@@ -32,6 +46,12 @@ router.post('/', (req, res) => {
     // 批量查标签统计
     const tagCounts = req.db.query(
       `SELECT offer_id, COUNT(*) AS count FROM product_tags WHERE offer_id IN (${placeholders}) GROUP BY offer_id`,
+      uniqueIds
+    )
+
+    // 批量查被查询次数 + 最后查询时间
+    const queryCounts = req.db.query(
+      `SELECT offer_id, query_count AS count, last_queried_at FROM product_query_stats WHERE offer_id IN (${placeholders})`,
       uniqueIds
     )
 
@@ -59,6 +79,7 @@ router.post('/', (req, res) => {
       const vc = viewCounts.find(r => r.offer_id === id)
       const cc = commentCounts.find(r => r.offer_id === id)
       const tc = tagCounts.find(r => r.offer_id === id)
+      const qc = queryCounts.find(r => r.offer_id === id)
       const vs = viewers.filter(r => r.offer_id === id).map(v => ({
         username: v.username,
         initial: v.username.charAt(0),
@@ -70,6 +91,8 @@ router.post('/', (req, res) => {
         view_count: vc ? vc.count : 0,
         comment_count: cc ? cc.count : 0,
         tag_count: tc ? tc.count : 0,
+        query_count: qc ? (qc.count || 0) : 0,
+        last_queried_at: qc ? (qc.last_queried_at || null) : null,
         viewers: vs,
         i_have_viewed: myViewSet.has(id)
       }

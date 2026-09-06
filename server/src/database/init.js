@@ -290,10 +290,27 @@ db.exec(`
   )
 `)
 
+// ============================================================
+// 15. product_query_stats — 商品被查询次数
+//    独立于 products 表：列表页商品未入库（没人点开过详情页）也照样计数
+//   offer_id        1688商品ID（主键）
+//   query_count     被查询次数（batch_info 真实查询 +1，前端缓存命中不计数）
+//   last_queried_at 最后查询时间
+// ============================================================
+db.exec(`
+  CREATE TABLE IF NOT EXISTS product_query_stats (
+    offer_id TEXT PRIMARY KEY,
+    query_count INTEGER DEFAULT 0,
+    last_queried_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`)
+
 // 兼容旧表：补充新增字段
 try { db.exec(`ALTER TABLE operation_logs ADD COLUMN username TEXT`) } catch (e) {}
 try { db.exec(`ALTER TABLE operation_logs ADD COLUMN detail TEXT`) } catch (e) {}
 try { db.exec(`ALTER TABLE users ADD COLUMN avatar_color TEXT`) } catch (e) {}
+// 商品被查询次数（插件真实查询 batch_info 时 +1，前端缓存命中不计数）
+try { db.exec(`ALTER TABLE products ADD COLUMN query_count INTEGER DEFAULT 0`) } catch (e) {}
 
 console.log('Database initialized successfully — 16 tables created')
 

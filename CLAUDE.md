@@ -46,7 +46,7 @@ wxt_1688/
     │   │   ├── router.js     # 6个路由：product/comment, product/tag, supplier/comment, supplier/tag, analysis/views, analysis/records
     │   │   └── pages/        # 各页面组件
     │   ├── win-content.content.js   # 注入到 detail.1688.com/offer/* 的 content script
-    │   ├── box-content.content.js   # 注入到 s.1688.com/selloffer/* 搜索结果页
+    │   ├── box-content.content.js   # 注入 *.1688.com/*，按域名分流：s./search./www. 列表页 + 其余子域名（shop 前缀或自定义名）店铺页（React fiber 找卡片）
     │   └── box/              # 搜索结果页内联 UI (标签/评论/浏览悬浮面板)
     ├── stores/
     │   ├── api/api.js        # 核心数据 store：标签池、评论、浏览统计、供应商状态
@@ -65,7 +65,7 @@ wxt_1688/
 
 ### 关键约定
 
-- **两个 content script 注入点**：商品详情页 (`detail.1688.com/offer/*`) 使用 `createIntegratedUi` 挂载 DraggableWindow；搜索结果页 (`s.1688.com/selloffer/*`) 使用 MutationObserver 监听列表变化，在每个商品卡片上注入迷你信息面板
+- **两个 content script 注入点**：商品详情页 (`detail.1688.com/offer/*`) 使用 `createIntegratedUi` 挂载 DraggableWindow；box-content 注入 `*.1688.com/*` 后按域名分流——`s./search./www.1688.com` 按 renderConfigs 选择器注入，**其余任何 1688.com 子域名视为供应商店铺页**（店铺二级域名不固定，shop 前缀或自定义名如 szkean，实测 8 家通用）用 React fiber（`props.data.id` 找 offer_id、向下 DFS 找 onClick 卡片根）注入，均使用 MutationObserver 监听列表变化
 - **UI 组件风格**：所有组件使用 scoped style，无 UI 框架依赖
 - **窗口位置持久化**：DraggableWindow 的 position/size/dotMode 通过 `browser.storage.local` 保存
 - **标签系统**：全局标签池 → 分配到商品/供应商，支持创建/编辑/删除/可见性切换

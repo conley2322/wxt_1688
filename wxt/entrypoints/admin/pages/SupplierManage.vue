@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { Shop, Search } from '@element-plus/icons-vue'
 import { api } from '../utils/useApi.js'
 import SupplierCard from '../components/SupplierCard.vue'
@@ -11,16 +11,31 @@ const searchText = ref('')
 // 筛选类型：all / commented / viewed
 const filterType = ref('all')
 
-onMounted(async () => {
-  await loadSuppliers()
-})
+// 分页
+const currentPage = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
+
+// 页头统计（由后端返回，不受筛选/搜索影响）
+const stats = ref({ total: 0, commented: 0, totalProducts: 0 })
+
+onMounted(loadSuppliers)
 
 async function loadSuppliers() {
   loading.value = true
   try {
-    const res = await api('/api/v1/suppliers/my-suppliers', 'GET')
+    const params = new URLSearchParams({
+      page: currentPage.value,
+      page_size: pageSize.value,
+      filter: filterType.value,
+    })
+    if (searchText.value.trim()) params.set('search', searchText.value.trim())
+
+    const res = await api(`/api/v1/suppliers/my-suppliers?${params}`, 'GET')
     if (res.code === 200) {
       suppliers.value = res.data || []
+      total.value = res.total || 0
+      if (res.stats) stats.value = res.stats
     }
   } catch (e) {
     console.error('加载供应商失败:', e)
@@ -29,30 +44,32 @@ async function loadSuppliers() {
   }
 }
 
-const filteredSuppliers = computed(() => {
-  let list = suppliers.value
-
-  // 按类型筛选
-  if (filterType.value === 'commented') {
-    list = list.filter(s => s.comment_count > 0)
-  } else if (filterType.value === 'viewed') {
-    list = list.filter(s => s.comment_count === 0)
-  }
-
-  // 搜索过滤
-  if (searchText.value.trim()) {
-    const kw = searchText.value.trim().toLowerCase()
-    list = list.filter(s => s.supplier_name.toLowerCase().includes(kw))
-  }
-
-  return list
+// 搜索防抖：输入停顿 300ms 后自动查询
+let searchTimer = null
+watch(searchText, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    currentPage.value = 1
+    loadSuppliers()
+  }, 300)
 })
 
-const stats = computed(() => ({
-  total: suppliers.value.length,
-  commented: suppliers.value.filter(s => s.comment_count > 0).length,
-  totalProducts: suppliers.value.reduce((sum, s) => sum + s.product_count, 0),
-}))
+// 切换筛选类型
+watch(filterType, () => {
+  currentPage.value = 1
+  loadSuppliers()
+})
+
+function handlePageChange(page) {
+  currentPage.value = page
+  loadSuppliers()
+}
+
+function handleSizeChange(size) {
+  pageSize.value = size
+  currentPage.value = 1
+  loadSuppliers()
+}
 </script>
 
 <template>
@@ -92,14 +109,27 @@ const stats = computed(() => ({
 
     <!-- 供应商列表 -->
     <div v-loading="loading">
-      <template v-if="filteredSuppliers.length > 0">
+      <template v-if="suppliers.length > 0">
         <SupplierCard
-          v-for="s in filteredSuppliers"
+          v-for="s in suppliers"
           :key="s.supplier_name"
           :supplier="s"
         />
       </template>
-      <el-empty v-else description="暂无关联的供应商" />
+      <el-empty v-else-if="!loading" description="暂无关联的供应商" />
+    </div>
+
+    <!-- 分页 -->
+    <div v-if="total > 0" class="pagination">
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :total="total"
+        :page-sizes="[10, 20, 50, 100]"
+        layout="total, sizes, prev, pager, next, jumper"
+        @size-change="handleSizeChange"
+        @current-change="handlePageChange"
+      />
     </div>
   </section>
 </template>
@@ -141,5 +171,11 @@ const stats = computed(() => ({
   margin-bottom: 18px;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 0;
 }
 </style>

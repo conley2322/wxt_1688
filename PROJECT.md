@@ -208,12 +208,17 @@
 - **导航**：概览 → 商品管理 → 标签管理 → 评论管理 → 系统设置
 - **当前状态**：除概览外的子页面均为占位状态（"即将上线"）
 
-### 3. Box（搜索列表卡片增强）
-- **触发方式**：自动注入 `s.1688.com/selloffer/*` 和 `search.1688.com/selloffer/*`
-- **功能**：在 1688 搜索结果页每个商品卡片上叠加协作信息
+### 3. Box（搜索列表/店铺页卡片增强）
+- **触发方式**：自动注入 `*.1688.com/*`（宽匹配，main 内按域名分流）
+  - `s.1688.com` / `search.1688.com` / `www.1688.com` → 搜索/货源/首页列表页
+  - 其余任何 1688.com 子域名 → 供应商店铺页（店铺首页 `/` 与全部商品页 `/page/offerlist.htm`）。店铺二级域名不固定（shop 前缀 / 自定义名如 szkean、seliya），故用排除法
+- **功能**：在 1688 商品卡片上叠加协作信息
 - **实现**：Content Script (`box-content.content.js`) 创建 Vue 实例挂载到每个卡片
 - **展示内容**：浏览统计、标签、评论（紧凑卡片样式）
-- **关键逻辑**：通过 `data-renderkey` / `data-aplus-report` / `href` 提取 `offer_id`
+- **关键逻辑**：
+  - 列表页：通过 `data-renderkey` / `data-aplus-report` / `href` 提取 `offer_id`
+  - 店铺页：React(xstore) 渲染，卡片无 class 无链接 —— 沿 React fiber 向上找 `props.data.id`（offer_id），再从该 fiber 向下 DFS 找第一个「宿主 div + onClick」作为卡片根（详见 `collectShopCards`）
+- **渲染开关**：`enableSearchList` / `enableOfferList` / `enableHomeRecommend` / `enableShopPage`（系统设置页可关）
 
 ### 4. Win（商品详情页浮窗）
 - **触发方式**：自动注入 `detail.1688.com/offer/*`
