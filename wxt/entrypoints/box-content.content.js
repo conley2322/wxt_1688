@@ -247,7 +247,7 @@ export default defineContentScript({
           s.enableHomeRecommend !== false ? renderConfigs[2] : null,
         ].filter(Boolean)
         queryCountMode = s.queryCountDisplay === 'mine' ? 'mine' : 'total'
-        box1ChartType = s.box1ChartType === 'line' ? 'line' : 'bar'
+        box1ChartType = ['bar', 'line', 'area', 'pie', 'ring', 'timeline'].includes(s.box1ChartType) ? s.box1ChartType : 'bar'
         console.log(`[box:list] 渲染开关: search=${s.enableSearchList !== false}, offerList=${s.enableOfferList !== false}, home=${s.enableHomeRecommend !== false} → 生效配置 ${cfgs.map(c => c.parent).join(' / ') || '无'}；查询次数显示: ${queryCountMode}；box1图表: ${box1ChartType}`)
       } catch (e) {
         console.error('[box:list] 读取设置失败:', e)
@@ -289,7 +289,7 @@ export default defineContentScript({
           return
         }
         queryCountMode = s.queryCountDisplay === 'mine' ? 'mine' : 'total'
-        box1ChartType = s.box1ChartType === 'line' ? 'line' : 'bar'
+        box1ChartType = ['bar', 'line', 'area', 'pie', 'ring', 'timeline'].includes(s.box1ChartType) ? s.box1ChartType : 'bar'
       } catch (e) {
         console.error('[box:shop] 读取设置失败:', e)
       }

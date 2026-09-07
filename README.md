@@ -99,4 +99,3 @@ npm start            # 后端生产模式
 - [PROJECT.md](./PROJECT.md) — 详细项目文档（架构、入口点、数据流、接口）
 - [CHANGELOG.md](./CHANGELOG.md) — 版本更新记录
 - [CLAUDE.md](./CLAUDE.md) — AI 协作开发规范
-- [docs/superpowers/](./docs/superpowers/) — 历史设计文档

@@ -156,8 +156,12 @@ async function autoSave() {
           <el-radio-group v-model="box1ChartType" @change="autoSave">
             <el-radio-button value="bar">柱状图</el-radio-button>
             <el-radio-button value="line">折线图</el-radio-button>
+            <el-radio-button value="area">面积图</el-radio-button>
+            <el-radio-button value="pie">饼状图</el-radio-button>
+            <el-radio-button value="ring">环形图</el-radio-button>
+            <el-radio-button value="timeline">时间轴</el-radio-button>
           </el-radio-group>
-          <div class="switch-desc">商品卡片 box1 中"谁查询了多少次"的图表样式（刷新 1688 页面后生效）</div>
+          <div class="switch-desc">商品卡片 box1 显示的"谁查询了多少次"图示（柱状/折线/面积/饼状/环形图，或最近一周查询时间轴），刷新 1688 页面后生效</div>
         </el-form-item>
         <el-form-item label="停止页面加载">
           <el-switch v-model="pageSwitches.enableStopLoading" active-text="开启" inactive-text="关闭" @change="autoSave" />

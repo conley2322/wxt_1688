@@ -1,12 +1,12 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts/core'
-import { LineChart, BarChart } from 'echarts/charts'
+import { LineChart, BarChart, PieChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
 // box1 图表按需引入（减小打包体积）
-echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
+echarts.use([LineChart, BarChart, PieChart, GridComponent, TooltipComponent, CanvasRenderer])
 
 const props = defineProps(['parentEl', 'offerId', 'batchCache', 'queryCountMode', 'chartType'])
 
@@ -77,10 +77,7 @@ function formatQueryTime(s) {
 const lastQueriedAtText = computed(() => formatQueryTime(lastQueriedAt.value))
 const iHaveViewed = computed(() => info.value?.i_have_viewed ?? false)
 
-// ── box1 视图切换：chart=查询次数图表 / time=最近一周查询时间轴 ──
-const view = ref('chart')
-
-// 时间轴数据：最近一周查询过的用户，按时间倒序，友好时间（今天/昨天/周几 + 时段）
+// ── box1 时间轴：最近一周查询过的用户，按时间倒序，友好时间（今天/昨天/周几 + 时段）──
 const timelineItems = computed(() => {
   const now = new Date()
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
@@ -113,16 +110,7 @@ const timelineItems = computed(() => {
     .sort((a, b) => b.ts - a.ts)
 })
 
-// 切回次数视图时图表容器重新挂载，需重新初始化 ECharts
-watch(view, v => {
-  if (v === 'chart') {
-    chartInstance?.dispose()
-    chartInstance = null
-    nextTick(renderChart)
-  }
-})
-
-// ── box1 图表：谁查询了多少次（柱状图/折线图，后台设置切换）──
+// ── box1 图表：谁查询了多少次（图型由后台设置决定：柱状/折线/面积/饼状/环形）──
 const chartEl = ref(null)
 let chartInstance = null
 
@@ -131,9 +119,56 @@ function renderChart() {
   if (!chartInstance) {
     chartInstance = echarts.init(chartEl.value)
   }
-  const isLine = props.chartType === 'line'
+  const type = props.chartType
   const users = [...queryUsers.value].sort((a, b) => b.count - a.count).slice(0, 8)
+
+  // 饼状图 / 环形图
+  if (type === 'pie' || type === 'ring') {
+    chartInstance.setOption({
+      tooltip: {
+        trigger: 'item',
+        textStyle: { fontSize: 11 },
+        formatter: p => `${p.data.fullName}：${p.data.value} 次`
+      },
+      series: [{
+        type: 'pie',
+        radius: type === 'ring' ? ['38%', '68%'] : '68%',
+        center: ['50%', '50%'],
+        label: { show: users.length <= 4, fontSize: 9, color: '#9ca3af', formatter: '{b}' },
+        labelLine: { length: 6, length2: 4, lineStyle: { color: '#d1d5db' } },
+        data: users.map(u => ({
+          value: u.count,
+          name: u.username,
+          fullName: u.username,
+          itemStyle: { color: u.is_me ? '#c9975c' : undefined }
+        }))
+      }]
+    }, true)
+    return
+  }
+
+  // 柱状图 / 折线图 / 面积图
+  const isLine = type === 'line' || type === 'area'
   const seriesColor = isLine ? '#c9975c' : '#8faedd'
+  const series = {
+    type: isLine ? 'line' : 'bar',
+    data: users.map(u => ({
+      value: u.count,
+      fullName: u.username,
+      itemStyle: {
+        color: u.is_me ? '#c9975c' : seriesColor,
+        ...(isLine || type === 'area' ? {} : { borderRadius: [3, 3, 0, 0] })
+      }
+    })),
+    barMaxWidth: 16,
+    smooth: true,
+    symbolSize: 5,
+    lineStyle: { width: 2, color: '#c9975c' },
+    itemStyle: isLine || type === 'area' ? { color: '#c9975c' } : {}
+  }
+  if (type === 'area') {
+    series.areaStyle = { opacity: 0.25 }
+  }
   chartInstance.setOption({
     grid: { left: 30, right: 8, top: 14, bottom: 20 },
     tooltip: {
@@ -154,22 +189,7 @@ function renderChart() {
       axisLabel: { fontSize: 9, color: '#9ca3af' },
       splitLine: { lineStyle: { color: '#f3f4f6' } }
     },
-    series: [{
-      type: isLine ? 'line' : 'bar',
-      data: users.map(u => ({
-        value: u.count,
-        fullName: u.username,
-        itemStyle: {
-          color: u.is_me ? '#c9975c' : seriesColor,
-          ...(isLine ? {} : { borderRadius: [3, 3, 0, 0] })
-        }
-      })),
-      barMaxWidth: 16,
-      smooth: true,
-      symbolSize: 5,
-      lineStyle: { width: 2, color: '#c9975c' },
-      itemStyle: isLine ? { color: '#c9975c' } : {}
-    }]
+    series: [series]
   }, true)
 }
 
@@ -243,7 +263,7 @@ const dotColor = computed(() => {
       </div>
     </div>
 
-    <!-- box1：被查询次数图表 / 最近一周查询时间轴（卡片内 [次数|时间] 切换） -->
+    <!-- box1：被查询次数 + 谁查询了多少次（图型由后台"系统设置"决定：柱状/折线/面积/饼状/环形/时间轴） -->
     <div class="box-card box1-card">
       <div class="box-row">
         <span class="box-stat box1-stat" :title="queryCountMode === 'mine' ? '我查询该商品信息的次数（每次实际查询 +1）' : '全团队查询该商品信息的总次数（每次实际查询 +1）'">
@@ -260,23 +280,21 @@ const dotColor = computed(() => {
           >{{ v.initial }}</span>
           <span v-if="box1Avatars.length > 3" class="avatar-more">+{{ box1Avatars.length - 3 }}</span>
         </span>
-        <div class="box1-tabs">
-          <button :class="{ active: view === 'chart' }" title="谁查询了多少次" @click="view = 'chart'">次数</button>
-          <button :class="{ active: view === 'time' }" title="最近一周谁查询过" @click="view = 'time'">时间</button>
-        </div>
       </div>
-      <template v-if="view === 'chart'">
+      <template v-if="props.chartType === 'timeline'">
+        <div class="box1-timeline">
+          <div v-if="!timelineItems.length" class="box1-timeline-empty">最近一周暂无查询记录</div>
+          <div v-for="(t, i) in timelineItems" :key="i" class="box1-timeline-item" :title="`${t.username} 查询了 ${t.count} 次`">
+            <span class="avatar-dot" :style="{ background: t.color }">{{ t.initial }}</span>
+            <span class="tl-name">{{ t.username }}</span>
+            <span class="tl-time">{{ t.time }}</span>
+          </div>
+        </div>
+      </template>
+      <template v-else>
         <div v-if="lastQueriedAtText" class="box1-sub">上次查询：{{ lastQueriedAtText }}</div>
         <div ref="chartEl" class="box1-chart"></div>
       </template>
-      <div v-else class="box1-timeline">
-        <div v-if="!timelineItems.length" class="box1-timeline-empty">最近一周暂无查询记录</div>
-        <div v-for="(t, i) in timelineItems" :key="i" class="box1-timeline-item" :title="`${t.username} 查询了 ${t.count} 次`">
-          <span class="avatar-dot" :style="{ background: t.color }">{{ t.initial }}</span>
-          <span class="tl-name">{{ t.username }}</span>
-          <span class="tl-time">{{ t.time }}</span>
-        </div>
-      </div>
     </div>
   </template>
 </template>
@@ -335,28 +353,6 @@ const dotColor = computed(() => {
 }
 .box1-stat svg {
   opacity: 0.9;
-}
-.box1-tabs {
-  margin-left: auto;
-  display: flex;
-  flex-shrink: 0;
-}
-.box1-tabs button {
-  font-size: 10px;
-  padding: 1px 7px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  color: #9ca3af;
-  cursor: pointer;
-  font-family: inherit;
-  line-height: 1.5;
-}
-.box1-tabs button:first-child { border-radius: 4px 0 0 4px; }
-.box1-tabs button:last-child { border-radius: 0 4px 4px 0; border-left: none; }
-.box1-tabs button.active {
-  color: #fff;
-  background: #c9975c;
-  border-color: #c9975c;
 }
 .box1-sub {
   font-size: 10px;

@@ -50,7 +50,7 @@ export const useAppStore = defineStore('app', () => {
       enableShopPage: true,
       /** box1 查询次数显示：'total'=全团队总次数 | 'mine'=仅我的次数 */
       queryCountDisplay: 'total',
-      /** box1 图表类型：'bar'=柱状图 | 'line'=折线图 */
+      /** box1 图表类型：'bar'=柱状图 | 'line'=折线图 | 'area'=面积图 | 'pie'=饼状图 | 'ring'=环形图 | 'timeline'=时间轴 */
       box1ChartType: 'bar',
       /** 进入 1688 商品详情页时自动停止页面加载（window.stop） */
       enableStopLoading: false,
