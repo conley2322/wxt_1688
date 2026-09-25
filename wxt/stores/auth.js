@@ -1,132 +1,39 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import store from '../utils/storage.js'
+import { getProfile, saveProfile } from '../utils/localdb.js'
 
+// 单机版：没有账号体系，本地个人资料（昵称 + 通用头像，可改名换色）
 export const useAuthStore = defineStore('auth', () => {
-  const serverAddress = ref('')
-  const username = ref('')
-  const token = ref('')
-  const isLoggedIn = ref(false)
-  const loading = ref(false)
-  const error = ref('')
+  const nickname = ref('')
+  const avatarColor = ref('#8a8f99')
+  const ready = ref(false)
 
+  /** 初始化：读取（或首次创建）本地资料 */
   async function restoreSession() {
-    try {
-      const stored = await store.get(['token', 'username', 'serverAddress'])
-      if (stored.token && stored.username) {
-        token.value = stored.token
-        username.value = stored.username
-        serverAddress.value = stored.serverAddress || ''
-        isLoggedIn.value = true
-      }
-    } catch (e) {
-      console.warn('恢复登录状态失败:', e)
-    }
+    const p = await getProfile()
+    nickname.value = p.nickname
+    avatarColor.value = p.avatar_color
+    ready.value = true
   }
 
-  async function saveToStorage() {
-    await store.set({
-      token: token.value,
-      username: username.value,
-      serverAddress: serverAddress.value,
-    })
+  async function save(patch) {
+    const p = await saveProfile(patch)
+    nickname.value = p.nickname
+    avatarColor.value = p.avatar_color
+    return p
   }
 
-  async function clearStorage() {
-    await store.remove('token')
-    await store.remove('username')
-    await store.remove('serverAddress')
-  }
-
-  /**
-   * @param {string} server - 服务器地址，如 "192.168.1.100:3000"
-   * @param {string} user - 用户名
-   * @param {string} password - 密码
-   */
-  async function login(server, user, password) {
-    loading.value = true
-    error.value = ''
-
-    try {
-      const baseUrl = server.startsWith('http') ? server : `http://${server}`
-      
-      // 通过 background 代理请求（绕过混合内容限制）
-      const response = await browser.runtime.sendMessage({
-        type: 'api-request',
-        url: `${baseUrl}/api/v1/users/login`,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: user, password }),
-      })
-
-      if (!response?.ok || response.data?.code !== 200) {
-        throw new Error(response?.data?.message || '登录失败')
-      }
-
-      serverAddress.value = baseUrl
-      username.value = response.data.data.user.username
-      token.value = response.data.data.token
-      isLoggedIn.value = true
-
-      await saveToStorage()
-    } catch (e) {
-      error.value = e.message || '登录失败，请重试'
-      isLoggedIn.value = false
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function logout() {
-    token.value = ''
-    username.value = ''
-    isLoggedIn.value = false
-    error.value = ''
-    await clearStorage()
-  }
-
-  function clearError() {
-    error.value = ''
-  }
-
-  /**
-   * 通用 API 请求方法，自动拼接 serverAddress
-   * @param {string} path - API 路径，如 "/api/v1/users/login"
-   * @param {Object} options - fetch 选项，如 { method: 'POST', body: JSON.stringify({ username: user, password }) }
-   */
-  async function request(path, options = {}) {
-    const url = `${serverAddress.value}${path}`
-    const headers = {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    }
-    if (token.value) {
-      headers['Authorization'] = `Bearer ${token.value}`
-    }
-    
-    // 通过 background 代理请求（绕过混合内容限制）
-    const response = await browser.runtime.sendMessage({
-      type: 'api-request',
-      url,
-      method: options.method || 'GET',
-      headers,
-      body: options.body,
-    })
-    
-    return response?.data || {}
+  // 兼容旧调用：win/App.vue 挂载时会调 initUser
+  async function initUser() {
+    await restoreSession()
   }
 
   return {
-    serverAddress,
-    username,
-    token,
-    isLoggedIn,
-    loading,
-    error,
+    nickname,
+    avatarColor,
+    ready,
     restoreSession,
-    login,
-    logout,
-    clearError,
-    request,
+    save,
+    initUser,
   }
 })

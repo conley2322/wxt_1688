@@ -108,64 +108,12 @@ onMounted(async () => {
       },
       MENU_CONF: {
         uploadImage: {
+          // 单机版：图片直接以 base64 存入本地 IndexedDB，无服务器上传
           async customUpload(file, insertFn) {
-            console.log('[CommentInput upload] 文件大小:', file.size, '文件名:', file.name)
+            console.log('[CommentInput upload] 文件大小:', file.size, '文件名:', file.name, '→ base64 本地存储')
             const reader = new FileReader()
-            reader.onload = async (e) => {
-              if (file.size < 10 * 1024) {
-                console.log('[CommentInput upload] <10KB, 使用 base64')
-                insertFn(e.target.result, file.name)
-                return
-              }
-              console.log('[CommentInput upload] >=10KB, 上传服务器')
-              try {
-                const stored = await browser.storage.local.get(['token', 'serverAddress'])
-                console.log('[CommentInput upload] serverAddress:', stored.serverAddress)
-                if (!stored.token) { console.log('[CommentInput upload] 无 token, fallback base64'); insertFn(e.target.result, file.name); return }
-                const uploadUrl = `${stored.serverAddress}/api/v1/upload/image`
-                console.log('[CommentInput upload] POST via background:', uploadUrl)
-                
-                // 通过 background 代理请求（绕过混合内容限制）
-                const response = await browser.runtime.sendMessage({
-                  type: 'api-request',
-                  url: uploadUrl,
-                  method: 'POST',
-                  headers: { 'Authorization': `Bearer ${stored.token}`, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ image: e.target.result, fileName: file.name })
-                })
-
-                console.log('[CommentInput upload] 响应:', response)
-                if (response?.ok && response.data?.code === 200 && response.data.data?.url) {
-                  const fullUrl = stored.serverAddress + response.data.data.url
-                  console.log('[CommentInput upload] 服务器 URL:', fullUrl)
-                  try {
-                    // 通过 background 代理获取图片，返回 base64（避免混合内容限制）
-                    const imgResponse = await browser.runtime.sendMessage({
-                      type: 'api-request',
-                      url: fullUrl,
-                      method: 'GET',
-                      responseType: 'blob'
-                    })
-                    if (imgResponse.ok && imgResponse.data) {
-                      // 使用 base64 URL 插入编辑器，避免混合内容限制
-                      urlMap.set(imgResponse.data, fullUrl)
-                      insertFn(imgResponse.data, file.name)
-                    } else {
-                      console.error('[CommentInput upload] 图片获取失败')
-                      insertFn(e.target.result, file.name)
-                    }
-                  } catch (err) {
-                    console.error('[CommentInput upload] 图片获取失败:', err)
-                    insertFn(e.target.result, file.name)
-                  }
-                } else {
-                  console.log('[CommentInput upload] 上传失败, fallback base64')
-                  insertFn(e.target.result, file.name)
-                }
-              } catch (err) {
-                console.error('[CommentInput upload] 异常:', err)
-                insertFn(e.target.result, file.name)
-              }
+            reader.onload = (e) => {
+              insertFn(e.target.result, file.name)
             }
             reader.readAsDataURL(file)
           },

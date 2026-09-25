@@ -19,22 +19,9 @@ const updates = ref([
 ])
 
 onMounted(async () => {
-  try {
-    const stored = await browser.storage.local.get(['token', 'serverAddress', 'username'])
-    if (stored.token) {
-      const res = await fetch(`${stored.serverAddress}/api/v1/users`, {
-        headers: { 'Authorization': `Bearer ${stored.token}` }
-      })
-      const data = await res.json()
-      if (data.code === 200) {
-        const me = data.data?.find(u => u.username === stored.username)
-        isAdmin.value = me?.role === 'admin'
-      }
-    }
-  } catch (e) {
-    console.error('检查权限失败:', e)
-  }
-  
+  // 单机版：无角色体系，始终可发布
+  isAdmin.value = true
+
   try {
     const res = await api('/api/v1/updates', 'GET')
     if (res.code === 200 && res.data.length > 0) {

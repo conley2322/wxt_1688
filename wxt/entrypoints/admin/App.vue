@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app.js'
 
@@ -7,20 +7,17 @@ const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const showContent = ref(false)
-const isAdmin = ref(false)
 
-const allNavItems = [
+// 单机版：无账号体系，导航不再区分管理员
+const navItems = [
   { path: '/dashboard', label: '概览', icon: 'DataBoard' },
   { path: '/profile', label: '个人中心', icon: 'UserFilled' },
-  { path: '/users', label: '用户管理', icon: 'User', adminOnly: true },
   { path: '/products', label: '商品管理', icon: 'Goods' },
   { path: '/suppliers', label: '供应商管理', icon: 'Shop' },
   { path: '/tags', label: '标签管理', icon: 'CollectionTag' },
   { path: '/updates', label: '更新日志', icon: 'Clock' },
   { path: '/settings', label: '系统设置', icon: 'Setting' },
 ]
-
-const navItems = computed(() => allNavItems.filter(item => !item.adminOnly || isAdmin.value))
 
 onMounted(async () => {
   console.log('[Admin] 挂载, 路由:', route.path)
@@ -32,21 +29,6 @@ onMounted(async () => {
   if (appStore.config.update.hasUpdate) {
     console.log(`[App] 发现新版本: ${appStore.config.update.latestVersion}`)
   }
-  // 检查当前用户角色
-  try {
-    const stored = await browser.storage.local.get(['token', 'serverAddress', 'username'])
-    if (stored.token) {
-      const res = await fetch(`${stored.serverAddress}/api/v1/users`, {
-        headers: { 'Authorization': `Bearer ${stored.token}` }
-      })
-      const data = await res.json()
-      if (data.code === 200) {
-        const me = data.data?.find(u => u.username === stored.username)
-        isAdmin.value = me?.role === 'admin'
-        console.log('[Admin] 角色:', me?.role, 'isAdmin:', isAdmin.value)
-      }
-    }
-  } catch (e) { console.error('[Admin] 角色检查失败:', e) }
   showContent.value = true
 })
 </script>

@@ -40,14 +40,12 @@ onMounted(async () => {
 
 async function loadProfile() {
   try {
-    const stored = await browser.storage.local.get(['username', 'token', 'serverAddress'])
+    // 单机版：本地只有一个用户资料，直接取第一个
     const res = await api('/api/v1/users?page_size=100', 'GET')
-    if (res.code === 200) {
-      const me = res.data.find(u => u.username === stored.username)
-      if (me) {
-        Object.assign(user, me)
-        if (me.avatar_color) customColor.value = me.avatar_color
-      }
+    if (res.code === 200 && res.data.length > 0) {
+      const me = res.data[0]
+      Object.assign(user, me)
+      if (me.avatar_color) customColor.value = me.avatar_color
     }
   } catch (e) {
     ElMessage.error('加载用户信息失败')
@@ -216,28 +214,6 @@ async function changePassword() {
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="saving" @click="saveProfile" class="save-btn">保存修改</el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
-
-        <el-card shadow="hover" class="profile-card" style="margin-top: 16px">
-          <template #header>
-            <div class="card-header">
-              <span class="card-title">修改密码</span>
-            </div>
-          </template>
-          <el-form label-width="72px" size="default" class="profile-form">
-            <el-form-item label="当前密码">
-              <el-input v-model="pwForm.current" type="password" show-password placeholder="输入当前密码" />
-            </el-form-item>
-            <el-form-item label="新密码">
-              <el-input v-model="pwForm.newPw" type="password" show-password placeholder="至少 4 位" />
-            </el-form-item>
-            <el-form-item label="确认密码">
-              <el-input v-model="pwForm.confirm" type="password" show-password placeholder="再次输入新密码" />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="changePassword">修改密码</el-button>
             </el-form-item>
           </el-form>
         </el-card>

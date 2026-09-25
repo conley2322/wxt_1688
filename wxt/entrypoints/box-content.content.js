@@ -1,20 +1,19 @@
+// box-content.content.js — 单机版：商品卡片注入（数据全部来自本地 IndexedDB）
 import { createApp, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import App from '../entrypoints/box/App.vue'
+import { handle as localHandle } from '../utils/localapi.js'
 
-// 列表页域名：搜索结果 / 货源列表 / 首页 / 以图搜图（renderConfigs 选择器规则）
+// 列表页域名：搜索结果 / 货源列表 / 首页 / 以图搜图
 const LIST_HOSTS = ['s.1688.com', 'search.1688.com', 'www.1688.com', 'air.1688.com']
 // 详情页由 win-content.content.js 负责，box 不参与
 const DETAIL_HOST = 'detail.1688.com'
 
 export default defineContentScript({
-  // Chrome match pattern 不支持部分通配，宽匹配后在 main 里按域名分流：
+  // 宽匹配后按域名分流：
   //   detail.1688.com          → 跳过（win-content 负责）
-  //   s./search./www.1688.com  → 列表页注入（原有 DOM 选择器规则）
-  //   其余 *.1688.com 子域名    → 供应商店铺页：读取 box-scan.content.js（主世界）标记的
-  //                              data-alocs-offer-id 卡片，挂载 UI（React fiber 只在主世界可见）
-  // 店铺二级域名不固定（shop*** 前缀 / 自定义名如 szkean、seliya），已实测 8 家店铺通用，
-  // 因此不能按 "shop 前缀" 判断，只能排除法
+  //   s./search./www./air.     → 列表页注入（DOM 选择器规则）
+  //   其余 *.1688.com 子域名    → 供应商店铺页：读取 box-scan.content.js（主世界）标记的卡片
   matches: ['*://*.1688.com/*'],
 
   main() {
@@ -28,31 +27,7 @@ export default defineContentScript({
     const isListHost = LIST_HOSTS.includes(host)
     console.log(`[box] 分流结果: ${isListHost ? '列表页流程' : '供应商店铺页流程'}`)
 
-    // 扫描轮次计数（MutationObserver 每轮 +1，用于日志）
     let scanCount = 0
-
-    // ── 检查登录状态 ──
-    async function checkLogin() {
-      const stored = await browser.storage.local.get(['token'])
-      return !!stored.token
-    }
-
-    async function showLoginTip() {
-      const loggedIn = await checkLogin()
-      if (!loggedIn) {
-        console.warn('[box] 未登录 → 显示登录提示条')
-        // 未登录，显示提示条
-        if (document.getElementById('__1688_login_tip__')) return true
-        const bar = document.createElement('div')
-        bar.id = '__1688_login_tip__'
-        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#fff3cd;color:#856404;text-align:center;padding:8px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,PingFang SC,Arial,sans-serif;border-bottom:1px solid #ffc107;'
-        bar.textContent = '⚠ 请先点击浏览器右上角的 1688 助手图标登录'
-        document.body.prepend(bar)
-        return true
-      }
-      return false
-    }
-
     const pinia = createPinia()
 
     // ── Toast 提示 ──
@@ -64,85 +39,53 @@ export default defineContentScript({
       setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300) }, 2000)
     }
 
-    // 共享的批量数据缓存
+    // 共享的本地数据缓存（offer_id → 卡片信息）
     const batchCache = reactive({})
 
-    // box1 查询次数显示模式：total=全团队总次数（默认）/ mine=仅我的次数（后台设置）
-    let queryCountMode = 'total'
-    // box1 图表类型：bar=柱状图（默认）/ line=折线图（后台设置）
-    let box1ChartType = 'bar'
+    // box1 图表类型：line=折线图（默认）| bar=柱状图（后台设置）
+    let box1ChartType = 'line'
 
-    // ── 批量请求（指纹去重：同一次页面会话内相同的 offer_ids 集合不重复请求）──
-    // 每次页面加载/翻页新看到的商品都会发起真实查询，后端逐次 +1 被查询次数
+    // ── 读取本地批量数据（IndexedDB，无网络）──
     let lastRequestFingerprint = ''
 
     async function requestBatch(offerIds, tag) {
       if (offerIds.length === 0) {
-        console.log(`[box:${tag}] 批量查询跳过：无 offer_id`)
+        console.log(`[box:${tag}] 本地批量读取跳过：无 offer_id`)
         return
       }
-
-      // 会话内去重：本页面会话已查过的商品不再重复查询/计数，
-      // 避免下拉加载新商品时，把页面上之前查过的旧商品再次 +1
+      // 会话内去重：已读过的商品不再重复读
       const newIds = offerIds.filter(id => !(id in batchCache))
       if (newIds.length === 0) {
-        console.log(`[box:${tag}] 批量查询跳过：${offerIds.length} 个商品本次会话都已查询过`)
+        console.log(`[box:${tag}] 本地批量读取跳过：${offerIds.length} 个商品本次会话都已读取`)
         return
       }
-      console.log(`[box:${tag}] 收到 ${offerIds.length} 个 offer_id，其中新商品 ${newIds.length} 个需要查询`)
+      console.log(`[box:${tag}] 收到 ${offerIds.length} 个 offer_id，其中新商品 ${newIds.length} 个需要读取`)
 
       const fingerprint = [...newIds].sort().join(',')
       if (fingerprint === lastRequestFingerprint) {
-        console.log(`[box:${tag}] 批量查询跳过：新商品集合与上次相同（${newIds.length} 个），防止重复请求`)
+        console.log(`[box:${tag}] 本地批量读取跳过：新商品集合与上次相同`)
         return
       }
       lastRequestFingerprint = fingerprint
 
       try {
-        const stored = await browser.storage.local.get(['token', 'serverAddress'])
-        if (!stored.token) {
-          console.warn(`[box:${tag}] 批量查询中止：未登录（无 token）`)
-          return
-        }
-        if (!stored.serverAddress) {
-          console.warn(`[box:${tag}] 批量查询中止：未配置服务器地址`)
-          return
-        }
-
-        const url = `${stored.serverAddress}/api/v1/products/batch_info`
-        console.log(`[box:${tag}] 批量查询 → POST ${url}，offer_ids(${newIds.length}):`, newIds.slice(0, 10), newIds.length > 10 ? '...' : '')
-
-        // 通过 background 代理请求（绕过混合内容限制）
-        const response = await browser.runtime.sendMessage({
-          type: 'api-request',
-          url,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${stored.token}`
-          },
-          body: JSON.stringify({ offer_ids: newIds })
-        })
-
-        if (response?.ok && response.data?.code === 200) {
-          Object.assign(batchCache, response.data.data)
-          const count = Object.keys(response.data.data).length
-          console.log(`[box:${tag}] 批量查询成功：命中 ${count} 个商品数据（本次查询已计入被查询次数）`)
+        const res = await localHandle('/api/v1/products/batch_info', 'POST', { offer_ids: newIds })
+        if (res.code === 200) {
+          Object.assign(batchCache, res.data)
+          const count = Object.keys(res.data).length
+          console.log(`[box:${tag}] 本地数据读取成功：命中 ${count} 个商品`)
           if (count > 0) showToast(`已加载 ${count} 个商品数据`)
         } else {
-          // 查询失败时重置指纹，允许下次重试
           lastRequestFingerprint = ''
-          console.error(`[box:${tag}] 批量查询失败：`, { ok: response?.ok, status: response?.status, code: response?.data?.code, message: response?.data?.message })
+          console.error(`[box:${tag}] 本地数据读取失败：`, res.message)
         }
       } catch (e) {
         lastRequestFingerprint = ''
-        console.error(`[box:${tag}] 批量查询异常:`, e)
+        console.error(`[box:${tag}] 本地数据读取异常:`, e)
       }
     }
 
     // ── 挂载卡片 UI ──
-    // opts.keepWrapper: 保留 wrapper 容器不挪动（店铺页用，配合 wrapperClass 做「已挂载」标记，
-    //                   检查+挂载全程同步，杜绝多轮触发并发导致的重复挂载）
     function mountCard(item, offerId, opts = {}) {
       const container = document.createElement('div')
       if (opts.wrapperClass) container.className = opts.wrapperClass
@@ -151,7 +94,6 @@ export default defineContentScript({
         parentEl: item,
         offerId,
         batchCache,
-        queryCountMode,
         chartType: box1ChartType
       })
       app.use(pinia)
@@ -170,13 +112,8 @@ export default defineContentScript({
     }
 
     // ════════════════════════════════════════════════
-    // A. 搜索/货源/首页列表页（s.1688.com 等，原逻辑）
+    // A. 搜索/货源/首页/以图搜图 列表页（DOM 选择器规则）
     // ════════════════════════════════════════════════
-
-    // 渲染配置
-    // parent: 外层容器选择器
-    // child:  要插入组件的子元素选择器（相对于 parent）
-    // 组件会注入到每个 parent 下的 child 里面
     const renderConfigs = [
       { parent: '.feeds-wrapper', child: '> a' },
       // 货源列表 / 以图搜图页（air.1688.com/kapp/1688-search/pc-image-search，卡片为 searchOfferWrapper--xxx）
@@ -185,7 +122,6 @@ export default defineContentScript({
       { parent: '.swiper-slide .list-padding', child: '.offer-card-container' },
     ]
 
-    // 提取 offer_id
     function extractOfferId(el) {
       const href = el.getAttribute('href') || ''
       const dataRenderkey = el.getAttribute('data-renderkey') || ''
@@ -233,10 +169,7 @@ export default defineContentScript({
     }
 
     const renderAll = async () => {
-      const needLogin = await showLoginTip()
-      if (needLogin) return
-
-      // 读取渲染开关，动态构建配置
+      // 渲染开关
       let cfgs = renderConfigs
       try {
         const stored = await browser.storage.local.get('appSettings')
@@ -246,9 +179,8 @@ export default defineContentScript({
           s.enableOfferList !== false ? renderConfigs[1] : null,
           s.enableHomeRecommend !== false ? renderConfigs[2] : null,
         ].filter(Boolean)
-        queryCountMode = s.queryCountDisplay === 'mine' ? 'mine' : 'total'
-        box1ChartType = ['bar', 'line', 'area', 'pie', 'ring', 'timeline'].includes(s.box1ChartType) ? s.box1ChartType : 'bar'
-        console.log(`[box:list] 渲染开关: search=${s.enableSearchList !== false}, offerList=${s.enableOfferList !== false}, home=${s.enableHomeRecommend !== false} → 生效配置 ${cfgs.map(c => c.parent).join(' / ') || '无'}；查询次数显示: ${queryCountMode}；box1图表: ${box1ChartType}`)
+        box1ChartType = ['bar', 'line'].includes(s.box1ChartType) ? s.box1ChartType : 'line'
+        console.log(`[box:list] 渲染开关: search=${s.enableSearchList !== false}, offerList=${s.enableOfferList !== false}, home=${s.enableHomeRecommend !== false}；box1图表: ${box1ChartType}`)
       } catch (e) {
         console.error('[box:list] 读取设置失败:', e)
       }
@@ -261,26 +193,15 @@ export default defineContentScript({
     }
 
     // ════════════════════════════════════════════════
-    // B. 供应商店铺页（shop 前缀 / 自定义名的 *.1688.com 子域名，首页 + offerlist）
+    // B. 供应商店铺页（React fiber 扫描由 box-scan 主世界完成）
     // ════════════════════════════════════════════════
-    // 店铺页为 React(xstore/winport) 渲染：卡片无 class、无 <a> 链接、offer_id 不在 DOM 属性里。
-    // React fiber 内部属性只有页面主世界可见，隔离世界（本脚本）读不到，
-    // 因此扫描由 box-scan.content.js（world: 'MAIN'）完成：
-    //   它把 offer_id 标记到卡片根的 data-alocs-offer-id 属性上，并广播 alocs-cards-marked 事件；
-    //   本脚本读取标记元素，请求批量数据并挂载 UI。
-
-    // 主世界扫描器标记新卡片后的事件
     document.addEventListener('alocs-cards-marked', () => {
       renderShopCards()
     })
 
     async function renderShopCards() {
-      const needLogin = await showLoginTip()
-      if (needLogin) return
-
       scanCount++
 
-      // 店铺页渲染开关 + 查询次数显示模式
       try {
         const stored = await browser.storage.local.get('appSettings')
         const s = stored.appSettings || {}
@@ -288,17 +209,12 @@ export default defineContentScript({
           if (scanCount === 1) console.log('[box:shop] 店铺页渲染已被设置关闭（enableShopPage=false），不注入')
           return
         }
-        queryCountMode = s.queryCountDisplay === 'mine' ? 'mine' : 'total'
-        box1ChartType = ['bar', 'line', 'area', 'pie', 'ring', 'timeline'].includes(s.box1ChartType) ? s.box1ChartType : 'bar'
+        box1ChartType = ['bar', 'line'].includes(s.box1ChartType) ? s.box1ChartType : 'line'
       } catch (e) {
         console.error('[box:shop] 读取设置失败:', e)
       }
 
-      // 读取主世界扫描器标记的卡片根元素，逐个原子挂载：
-      // 「检查是否已挂载」与「挂载」之间不能有任何 await/异步空隙，
-      // 否则事件、MutationObserver、初始调用并发触发时会在空隙内重复挂载（一张卡出现多个信息条）。
-      // 防重标记是稳定的 wrapper 容器 .alocs-shop-mount（box/App.vue 的 .box-card 在它里面）：
-      // React 重渲染若清掉卡片子节点，wrapper 会消失，之后会自动重新挂载。
+      // 读取主世界扫描器标记的卡片根元素，逐个原子挂载
       const markedEls = document.querySelectorAll('[data-alocs-offer-id]')
       let mounted = 0
       const mountedOffers = []

@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { handle as localHandle } from '../../utils/localapi.js'
+import { getProfile } from '../../utils/localdb.js'
 
 export const useApiStore = defineStore('api', () => {
 
@@ -50,80 +52,28 @@ export const useApiStore = defineStore('api', () => {
   const supplierComments = ref([])
 
   // ══════════════════════════════════════
-  // AJAX 封装（通过 background 代理，绕过混合内容限制）
+  // AJAX 封装（单机版：直接走本地 IndexedDB 接口路由，无网络请求）
   // ══════════════════════════════════════
   async function ajax(url, method, body) {
-    const stored = await browser.storage.local.get(['token', 'username', 'serverAddress'])
-    if (!stored.token) {
-      throw new Error('未登录')
+    const res = await localHandle(url, method, body)
+    if (res.code === 401) {
+      alert('本地数据访问异常，请重试')
+      throw new Error('本地数据访问异常')
     }
-
-    const fullUrl = stored.serverAddress + url
-    const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${stored.token}`
+    if (res.code !== 200) {
+      throw new Error(res.message || '本地操作失败')
     }
-
-    const response = await browser.runtime.sendMessage({
-      type: 'api-request',
-      url: fullUrl,
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined
-    })
-
-    if (!response) {
-      throw new Error('请求失败：无响应')
-    }
-    if (response.error) {
-      throw new Error(response.error)
-    }
-    if (response.status === 401) {
-      alert('登录已过期，请重新登录')
-      throw new Error('登录已过期')
-    }
-
-    const data = response.data
-    if (response.status !== 200 || data?.code !== 200) {
-      throw new Error(data?.message || '请求失败')
-    }
-    return data
+    return res
   }
 
   // ══════════════════════════════════════
-  // 初始化用户
+  // 初始化用户（单机版：读本地资料）
   // ══════════════════════════════════════
   async function initUser() {
-    const stored = await browser.storage.local.get(['username'])
-    if (stored.username) {
-      currentUser.value.name = stored.username
-      currentUser.value.initial = stored.username.charAt(0).toUpperCase()
-
-      // 从服务端拉取用户头像颜色
-      try {
-        const data = await ajax('/api/v1/users?page_size=200', 'GET')
-        const me = data.data?.find(u => u.username === stored.username)
-        if (me?.avatar_color) {
-          currentUser.value.color = me.avatar_color
-        } else {
-          // 降级：哈希取色
-          let hash = 0
-          for (let i = 0; i < stored.username.length; i++) {
-            hash = stored.username.charCodeAt(i) + ((hash << 5) - hash)
-          }
-          const pool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
-          currentUser.value.color = pool[Math.abs(hash) % pool.length]
-        }
-      } catch {
-        // 网络失败时降级
-        let hash = 0
-        for (let i = 0; i < stored.username.length; i++) {
-          hash = stored.username.charCodeAt(i) + ((hash << 5) - hash)
-        }
-        const pool = ['#ff6a00', '#2ecc71', '#3498db', '#9b59b6', '#e74c3c', '#1abc9c', '#f39c12', '#34495e']
-        currentUser.value.color = pool[Math.abs(hash) % pool.length]
-      }
-    }
+    const p = await getProfile()
+    currentUser.value.name = p.nickname
+    currentUser.value.initial = p.nickname.charAt(0).toUpperCase()
+    currentUser.value.color = p.avatar_color || '#8a8f99'
   }
 
   // ══════════════════════════════════════
