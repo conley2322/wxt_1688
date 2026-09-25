@@ -4,7 +4,6 @@ import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { api as dataApi } from '../../utils/dataClient.js'
 
 // box1 图表按需引入（减小打包体积）
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
@@ -36,33 +35,9 @@ const info = computed(() => props.batchCache?.[offer_id] || null)
 const viewCount = computed(() => info.value?.view_count ?? 0)
 const iHaveViewed = computed(() => info.value?.i_have_viewed ?? false)
 
-// ── 我的资料（昵称 + 头像色，通用头像可改）──
-const profile = ref({ nickname: '我', avatar_color: '#8a8f99' })
-onMounted(async () => {
-  const res = await dataApi('/api/v1/users', 'GET')
-  const p = res.code === 200 && res.data[0] ? res.data[0] : null
-  if (p) profile.value = { nickname: p.nickname || p.username || '我', avatar_color: p.avatar_color || '#8a8f99' }
-})
-
-// ── 上次浏览时间 ──
-function formatTime(ts) {
-  if (!ts) return ''
-  const d = new Date(ts)
-  const now = new Date()
-  const pad = n => String(n).padStart(2, '0')
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
-  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
-  if (sameDay) return `今天 ${hm}`
-  const sameYear = d.getFullYear() === now.getFullYear()
-  if (sameYear) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
-}
-const lastViewedAtText = computed(() => {
-  const ts = info.value?.last_viewed_at
-  return ts ? formatTime(ts) : ''
-})
-
-// ── box1 图表：我最近 14 天的浏览记录（X=日期，Y=次数）──
+// ── box1 折线图：最近 14 天浏览记录（X=日期，Y=次数）──
+// 只要有浏览记录就显示（折线图数据来自 batch 的 my_views_timeline）
+const hasChartData = computed(() => !!info.value?.my_views_timeline?.some(t => t.count > 0))
 const chartEl = ref(null)
 let chartInstance = null
 
@@ -114,6 +89,7 @@ onMounted(() => nextTick(renderChart))
 onUnmounted(() => { chartInstance?.dispose(); chartInstance = null })
 watch(() => info.value?.my_views_timeline, () => nextTick(renderChart))
 watch(() => props.chartType, () => nextTick(renderChart))
+watch(hasChartData, (v) => { if (v) nextTick(renderChart) })
 
 // 小圆点颜色：绿色=看过，灰色=没看过
 const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
@@ -134,19 +110,9 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
       </div>
     </div>
 
-    <!-- box1：我的浏览统计 + 最近 14 天浏览时间折线图 -->
-    <div class="box-card box1-card">
-      <div class="box-row">
-        <span class="box-stat box1-stat" title="我浏览该商品的次数">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          浏览 {{ viewCount }} 次
-        </span>
-        <span class="avatar-stack box1-avatars" :title="profile.nickname">
-          <span class="avatar-dot" :style="{ background: profile.avatar_color }">{{ profile.nickname.charAt(0) }}</span>
-        </span>
-        <span v-if="lastViewedAtText" class="box1-time" :title="'上次浏览时间：' + (info?.last_viewed_at ? new Date(info.last_viewed_at).toLocaleString('zh-CN', { hour12: false }) : '')">{{ lastViewedAtText }}</span>
-      </div>
-      <div v-show="info?.my_views_timeline?.some(t => t.count > 0)" ref="chartEl" class="box1-chart"></div>
+    <!-- box1：仅折线图（最近 14 天浏览记录），商品有浏览记录才出现 -->
+    <div v-if="hasChartData" class="box-card box1-card">
+      <div ref="chartEl" class="box1-chart"></div>
     </div>
   </template>
 </template>
@@ -199,22 +165,6 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
   width: 100%;
   height: 96px;
   margin-top: 2px;
-}
-.box1-stat {
-  color: #c9975c;
-  font-weight: 600;
-}
-.box1-stat svg {
-  opacity: 0.9;
-}
-.box1-time {
-  margin-left: auto;
-  font-size: 10px;
-  color: #bbb;
-  white-space: nowrap;
-}
-.box1-avatars {
-  margin-left: 2px;
 }
 /* ── 头像栈 ── */
 .avatar-stack { display: flex; align-items: center; flex-shrink: 0; }

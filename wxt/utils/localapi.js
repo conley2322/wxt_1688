@@ -113,13 +113,14 @@ async function route(path, method, body, query) {
 
   // ── 卡片批量信息（box）──
   if (path === '/api/v1/products/batch_info' && method === 'POST') {
+    const uniqueIds = [...new Set(body.offer_ids || [])]
     const [products, records, comments, assigns] = await Promise.all([
       db.all('products'), db.all('view_records'), db.all('comments'), db.all('tag_assign'),
     ])
     const result = {}
-    for (const offer_id of body.offer_ids) {
+    // 每个请求的商品都返回一条（未浏览过的返回 0），保证卡片一定能匹配到真实数据
+    for (const offer_id of uniqueIds) {
       const p = products.find(x => x.offer_id === offer_id)
-      if (!p) continue
       const views = records.filter(r => r.offer_id === offer_id)
       const cmts = comments.filter(c => c.kind === 'product' && c.target === offer_id)
       const tags = assigns.filter(a => a.kind === 'product' && a.target === offer_id)

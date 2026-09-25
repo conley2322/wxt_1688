@@ -161,9 +161,16 @@ export default defineContentScript({
         item.dataset.rendered = 'true'
 
         const offerId = extractOfferId(item)
-        console.log(`[box:list] 挂载卡片: offerId=${offerId || '未识别'}`)
-        mountCard(item, offerId)
-        mounted++
+        // 提取不到 offer_id 的卡片（广告位/异构卡片）不挂载
+        if (!offerId) return
+        try {
+          console.log(`[box:list] 挂载卡片: offerId=${offerId}`)
+          mountCard(item, offerId)
+          mounted++
+        } catch (e) {
+          // 单卡挂载失败不影响其余卡片
+          console.error('[box:list] 挂载失败:', offerId, e)
+        }
       })
       return mounted
     }
