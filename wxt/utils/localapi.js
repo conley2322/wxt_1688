@@ -112,27 +112,39 @@ async function route(path, method, body, query) {
   }
 
   // ── 卡片批量信息（box）──
+  // 语义：requestBatch 只对"本次页面会话首次渲染"的商品发请求，
+  // 因此收到请求 = 该商品本次刷出 → 出现次数 +1（与详情页浏览次数分开统计）
   if (path === '/api/v1/products/batch_info' && method === 'POST') {
     const uniqueIds = [...new Set(body.offer_ids || [])]
-    const [products, records, comments, assigns] = await Promise.all([
-      db.all('products'), db.all('view_records'), db.all('comments'), db.all('tag_assign'),
+    // 出现次数 +1（每个商品一条流水）
+    for (const offer_id of uniqueIds) {
+      await db.add('appear_records', { offer_id, appeared_at: Date.now() })
+    }
+    const [products, records, comments, assigns, appears] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('comments'), db.all('tag_assign'), db.all('appear_records'),
     ])
     const result = {}
     // 每个请求的商品都返回一条（未浏览过的返回 0），保证卡片一定能匹配到真实数据
     for (const offer_id of uniqueIds) {
       const p = products.find(x => x.offer_id === offer_id)
       const views = records.filter(r => r.offer_id === offer_id)
+      const apps = appears.filter(r => r.offer_id === offer_id)
       const cmts = comments.filter(c => c.kind === 'product' && c.target === offer_id)
       const tags = assigns.filter(a => a.kind === 'product' && a.target === offer_id)
-      // 最近 14 天按天聚合的浏览次数（box1 时间折线图数据源）
+      // 最近 14 天按天聚合（box1 双折线图数据源：出现 + 浏览）
       const timeline = []
       const today = new Date(); today.setHours(0, 0, 0, 0)
       for (let i = 13; i >= 0; i--) {
         const dayStart = today.getTime() - i * DAY
         const label = `${String(new Date(dayStart).getMonth() + 1).padStart(2, '0')}-${String(new Date(dayStart).getDate()).padStart(2, '0')}`
-        timeline.push({ date: label, count: views.filter(v => v.viewed_at >= dayStart && v.viewed_at < dayStart + DAY).length })
+        timeline.push({
+          date: label,
+          appear: apps.filter(v => v.appeared_at >= dayStart && v.appeared_at < dayStart + DAY).length,
+          view: views.filter(v => v.viewed_at >= dayStart && v.viewed_at < dayStart + DAY).length,
+        })
       }
       result[offer_id] = {
+        appear_count: apps.length,
         view_count: views.length,
         comment_count: cmts.length,
         tag_count: tags.length,

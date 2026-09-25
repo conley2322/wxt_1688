@@ -3,13 +3,14 @@
 // 存储用量显示 / 软上限自动清理 / JSON 导入导出 都在这里。
 
 const DB_NAME = 'alocs-local'
-const DB_VERSION = 1
+const DB_VERSION = 2 // v2: 新增 appear_records（出现次数流水）
 
 // store 名 → keyPath（null 表示自增主键）
 export const STORES = {
   profile: null,        // key 'me'：{ nickname, avatar_color }
   products: 'offer_id', // { offer_id, title, main_img_url, supplier_name, created_at }
-  view_records: null,   // 自增 { offer_id, viewed_at }
+  view_records: null,   // 自增 { offer_id, viewed_at } — 详情页浏览记录
+  appear_records: null, // 自增 { offer_id, appeared_at } — 列表页出现记录（组件渲染即 +1）
   suppliers: 'name',    // { name, address, memberId, created_at }
   comments: 'id',       // { id, kind:'product'|'supplier', target, text, created_at, updated_at }
   tags: 'id',           // { id, text, font_color, bg_color, creator, created_at }
@@ -135,17 +136,21 @@ export async function cleanupIfNeeded() {
   if (info.usageMB < quotaMB) return { cleaned: false, ...info }
 
   let deleted = 0
-  while (info.usageMB >= quotaMB * 0.8) {
-    const { keys, rows } = await getAllWithKeys('view_records')
-    if (rows.length === 0) break
-    // 按浏览时间从旧到新删
-    const ordered = rows
-      .map((row, i) => ({ key: keys[i], viewed_at: row.viewed_at }))
-      .sort((a, b) => a.viewed_at - b.viewed_at)
-    const batch = ordered.slice(0, Math.min(500, ordered.length))
-    for (const r of batch) await db.delete('view_records', r.key)
-    deleted += batch.length
-    info = await storageInfo()
+  // 流水数据（浏览记录 + 出现记录）都按最旧优先清理，评论/标签等创作数据永不自动清
+  const flowStores = ['view_records', 'appear_records']
+  for (const store of flowStores) {
+    while (info.usageMB >= quotaMB * 0.8) {
+      const { keys, rows } = await getAllWithKeys(store)
+      if (rows.length === 0) break
+      const timeKey = store === 'view_records' ? 'viewed_at' : 'appeared_at'
+      const ordered = rows
+        .map((row, i) => ({ key: keys[i], ts: row[timeKey] }))
+        .sort((a, b) => a.ts - b.ts)
+      const batch = ordered.slice(0, Math.min(500, ordered.length))
+      for (const r of batch) await db.delete(store, r.key)
+      deleted += batch.length
+      info = await storageInfo()
+    }
   }
   return { cleaned: true, deleted, ...info }
 }

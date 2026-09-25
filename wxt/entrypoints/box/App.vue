@@ -2,11 +2,11 @@
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent } from 'echarts/components'
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
 // box1 图表按需引入（减小打包体积）
-echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
+echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const props = defineProps(['parentEl', 'offerId', 'batchCache', 'chartType'])
 
@@ -32,19 +32,24 @@ const offer_id = props.offerId || match_renderkey || match_href || match_offerId
 // ── 从批量缓存中读数据（单机版：全部是自己的数据）──
 const info = computed(() => props.batchCache?.[offer_id] || null)
 
+// 两个独立计数：出现次数（列表页刷出即 +1）/ 浏览次数（点进详情页 +1）
+const appearCount = computed(() => info.value?.appear_count ?? 0)
 const viewCount = computed(() => info.value?.view_count ?? 0)
 const iHaveViewed = computed(() => info.value?.i_have_viewed ?? false)
 
-// ── box1 折线图：最近 14 天浏览记录（X=日期，Y=次数）──
-// 只要有浏览记录就显示（折线图数据来自 batch 的 my_views_timeline）
-const hasChartData = computed(() => !!info.value?.my_views_timeline?.some(t => t.count > 0))
+// ── box1 双折线图：最近 14 天 出现次数 / 浏览次数（X=日期，Y=次数）──
+// 两个计数任一有记录就显示
+const hasChartData = computed(() => {
+  const t = info.value?.my_views_timeline
+  return !!t && t.some(x => x.appear > 0 || x.view > 0)
+})
 const chartEl = ref(null)
 let chartInstance = null
 
 function renderChart() {
   const timeline = info.value?.my_views_timeline
-  // 没有浏览数据的商品不渲染图表（避免空图表区）
-  if (!chartEl.value || !timeline || !timeline.some(t => t.count > 0)) {
+  // 没有任何数据的商品不渲染图表（避免空图表区）
+  if (!chartEl.value || !timeline || !timeline.some(t => t.appear > 0 || t.view > 0)) {
     if (chartInstance) { chartInstance.dispose(); chartInstance = null }
     return
   }
@@ -52,12 +57,18 @@ function renderChart() {
     chartInstance = echarts.init(chartEl.value)
   }
   const isLine = props.chartType !== 'bar'
+  const common = { smooth: true, symbolSize: 4, barMaxWidth: 8 }
   chartInstance.setOption({
-    grid: { left: 26, right: 6, top: 12, bottom: 18 },
+    grid: { left: 26, right: 6, top: 22, bottom: 18 },
+    legend: {
+      top: 0, right: 0, itemWidth: 10, itemHeight: 8,
+      textStyle: { fontSize: 8, color: '#9ca3af' },
+      data: ['出现', '浏览']
+    },
     tooltip: {
       trigger: 'axis',
       textStyle: { fontSize: 11 },
-      formatter: p => `${p[0].axisValue}：浏览 ${p[0].value} 次`
+      formatter: ps => `${ps[0].axisValue}<br/>${ps.map(p => `${p.seriesName} ${p.value} 次`).join('<br/>')}`
     },
     xAxis: {
       type: 'category',
@@ -72,16 +83,27 @@ function renderChart() {
       axisLabel: { fontSize: 8, color: '#9ca3af' },
       splitLine: { lineStyle: { color: '#f3f4f6' } }
     },
-    series: [{
-      type: isLine ? 'line' : 'bar',
-      data: timeline.map(t => t.count),
-      smooth: true,
-      symbolSize: 4,
-      lineStyle: { width: 2, color: '#c9975c' },
-      itemStyle: { color: '#c9975c', ...(isLine ? {} : { borderRadius: [3, 3, 0, 0] }) },
-      areaStyle: isLine ? { opacity: 0.18 } : undefined,
-      barMaxWidth: 10,
-    }]
+    series: [
+      {
+        name: '出现',
+        type: isLine ? 'line' : 'bar',
+        data: timeline.map(t => t.appear),
+        color: '#8faedd',
+        ...common,
+        lineStyle: { width: 2, color: '#8faedd' },
+        itemStyle: { color: '#8faedd', ...(isLine ? {} : { borderRadius: [3, 3, 0, 0] }) },
+        areaStyle: isLine ? { opacity: 0.15 } : undefined,
+      },
+      {
+        name: '浏览',
+        type: isLine ? 'line' : 'bar',
+        data: timeline.map(t => t.view),
+        color: '#c9975c',
+        ...common,
+        lineStyle: { width: 2, color: '#c9975c' },
+        itemStyle: { color: '#c9975c' },
+      }
+    ]
   }, true)
 }
 
@@ -102,15 +124,21 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
         <!-- 小圆点 -->
         <span class="box-dot" :style="{ background: dotColor }"></span>
 
-        <!-- 浏览数（单机版：仅自己的浏览记录） -->
-        <span class="box-stat" title="我浏览过的次数">
+        <!-- 出现次数（列表页刷出即 +1） -->
+        <span class="box-stat" title="出现次数：每次页面刷出这个商品 +1">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          {{ viewCount }}
+          出现 {{ appearCount }}
+        </span>
+
+        <!-- 浏览次数（点进详情页 +1） -->
+        <span class="box-stat" :style="{ color: iHaveViewed ? '#c9975c' : '#bbb' }" title="浏览次数：点进商品详情页 +1">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          浏览 {{ viewCount }}
         </span>
       </div>
     </div>
 
-    <!-- box1：仅折线图（最近 14 天浏览记录），商品有浏览记录才出现 -->
+    <!-- box1：双折线图（最近 14 天 出现/浏览），有记录才出现 -->
     <div v-if="hasChartData" class="box-card box1-card">
       <div ref="chartEl" class="box1-chart"></div>
     </div>
@@ -132,7 +160,7 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
 .box-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: nowrap;
   justify-content: flex-start;
   width: 100%;
@@ -155,23 +183,15 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
   opacity: 0.5;
   flex-shrink: 0;
 }
-/* ── box1：浏览统计 + 图表 ── */
+/* ── box1：双折线图 ── */
 .box1-card {
   height: auto;
-  padding: 6px 8px 2px;
+  padding: 4px 8px 2px;
   display: block;
 }
 .box1-chart {
   width: 100%;
   height: 96px;
   margin-top: 2px;
-}
-/* ── 头像栈 ── */
-.avatar-stack { display: flex; align-items: center; flex-shrink: 0; }
-.avatar-dot {
-  width: 16px; height: 16px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 8px; font-weight: 600; color: #fff;
-  border: 1.5px solid #f5f6f8; flex-shrink: 0;
 }
 </style>
