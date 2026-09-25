@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { handle as localHandle } from '../../utils/localapi.js'
-import { getProfile } from '../../utils/localdb.js'
+import { api as dataApi } from '../../utils/dataClient.js'
 
 export const useApiStore = defineStore('api', () => {
 
@@ -52,10 +51,10 @@ export const useApiStore = defineStore('api', () => {
   const supplierComments = ref([])
 
   // ══════════════════════════════════════
-  // AJAX 封装（单机版：直接走本地 IndexedDB 接口路由，无网络请求）
+  // AJAX 封装（单机版：通过 background 消息读写扩展 origin 的唯一 IndexedDB）
   // ══════════════════════════════════════
   async function ajax(url, method, body) {
-    const res = await localHandle(url, method, body)
+    const res = await dataApi(url, method, body)
     if (res.code === 401) {
       alert('本地数据访问异常，请重试')
       throw new Error('本地数据访问异常')
@@ -67,13 +66,16 @@ export const useApiStore = defineStore('api', () => {
   }
 
   // ══════════════════════════════════════
-  // 初始化用户（单机版：读本地资料）
+  // 初始化用户（单机版：读本地资料，经 background）
   // ══════════════════════════════════════
   async function initUser() {
-    const p = await getProfile()
-    currentUser.value.name = p.nickname
-    currentUser.value.initial = p.nickname.charAt(0).toUpperCase()
-    currentUser.value.color = p.avatar_color || '#8a8f99'
+    const res = await dataApi('/api/v1/users', 'GET')
+    const me = res.code === 200 ? res.data[0] : null
+    if (me) {
+      currentUser.value.name = me.nickname || me.username
+      currentUser.value.initial = (me.nickname || me.username || '?').charAt(0).toUpperCase()
+      currentUser.value.color = me.avatar_color || '#8a8f99'
+    }
   }
 
   // ══════════════════════════════════════

@@ -2,7 +2,7 @@
 import { createApp, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import App from '../entrypoints/box/App.vue'
-import { handle as localHandle } from '../utils/localapi.js'
+import { api as dataApi } from '../utils/dataClient.js'
 
 // 列表页域名：搜索结果 / 货源列表 / 首页 / 以图搜图
 const LIST_HOSTS = ['s.1688.com', 'search.1688.com', 'www.1688.com', 'air.1688.com']
@@ -69,7 +69,7 @@ export default defineContentScript({
       lastRequestFingerprint = fingerprint
 
       try {
-        const res = await localHandle('/api/v1/products/batch_info', 'POST', { offer_ids: newIds })
+        const res = await dataApi('/api/v1/products/batch_info', 'POST', { offer_ids: newIds })
         if (res.code === 200) {
           Object.assign(batchCache, res.data)
           const count = Object.keys(res.data).length

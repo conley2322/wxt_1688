@@ -4,7 +4,7 @@ import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { getProfile } from '../../utils/localdb.js'
+import { api as dataApi } from '../../utils/dataClient.js'
 
 // box1 图表按需引入（减小打包体积）
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
@@ -39,7 +39,9 @@ const iHaveViewed = computed(() => info.value?.i_have_viewed ?? false)
 // ── 我的资料（昵称 + 头像色，通用头像可改）──
 const profile = ref({ nickname: '我', avatar_color: '#8a8f99' })
 onMounted(async () => {
-  profile.value = await getProfile()
+  const res = await dataApi('/api/v1/users', 'GET')
+  const p = res.code === 200 && res.data[0] ? res.data[0] : null
+  if (p) profile.value = { nickname: p.nickname || p.username || '我', avatar_color: p.avatar_color || '#8a8f99' }
 })
 
 // ── 上次浏览时间 ──
@@ -66,7 +68,11 @@ let chartInstance = null
 
 function renderChart() {
   const timeline = info.value?.my_views_timeline
-  if (!chartEl.value || !timeline) return
+  // 没有浏览数据的商品不渲染图表（避免空图表区）
+  if (!chartEl.value || !timeline || !timeline.some(t => t.count > 0)) {
+    if (chartInstance) { chartInstance.dispose(); chartInstance = null }
+    return
+  }
   if (!chartInstance) {
     chartInstance = echarts.init(chartEl.value)
   }
@@ -140,7 +146,7 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
         </span>
         <span v-if="lastViewedAtText" class="box1-time" :title="'上次浏览时间：' + (info?.last_viewed_at ? new Date(info.last_viewed_at).toLocaleString('zh-CN', { hour12: false }) : '')">{{ lastViewedAtText }}</span>
       </div>
-      <div ref="chartEl" class="box1-chart"></div>
+      <div v-show="info?.my_views_timeline?.some(t => t.count > 0)" ref="chartEl" class="box1-chart"></div>
     </div>
   </template>
 </template>
