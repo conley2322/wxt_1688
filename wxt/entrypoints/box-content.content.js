@@ -9,6 +9,40 @@ const LIST_HOSTS = ['s.1688.com', 'search.1688.com', 'www.1688.com', 'air.1688.c
 // 详情页由 win-content.content.js 负责，box 不参与
 const DETAIL_HOST = 'detail.1688.com'
 
+// 非店铺子域名：指向这些 host 的链接不是供应商名
+const NON_SHOP_HOSTS = new Set(['www', 's', 'search', 'detail', 'air', 'r', 'login', 'work', 'page', 'open', '114', 'kj', 'sale', 'mall'])
+
+// ── 列表页：从卡片 DOM 权威提取供应商名（精确文本，不做模糊猜测）──
+function extractSupplierName(card) {
+  // 以图搜图卡片：div[class*="shopName"]
+  const shopNameEl = card.querySelector('[class*="shopName--"], [class*="shopName"]')
+  if (shopNameEl) {
+    const t = shopNameEl.textContent.trim()
+    if (t && t.length <= 40) return t
+  }
+  // 搜索页卡片：a.offer-desc-item 中指向店铺子域名的链接
+  for (const a of card.querySelectorAll('a.offer-desc-item')) {
+    const m = (a.getAttribute('href') || '').match(/^https?:\/\/([a-z0-9-]+)\.1688\.com/i)
+    if (m && !NON_SHOP_HOSTS.has(m[1].toLowerCase())) {
+      const t = a.textContent.trim()
+      if (t && t.length <= 40) return t
+    }
+  }
+  return ''
+}
+
+// ── 店铺页：整页一个供应商，取头部公司名 ──
+function getPageSupplierName() {
+  let fallback = ''
+  for (const el of document.querySelectorAll('.hover-trigger')) {
+    const t = el.textContent.trim()
+    if (!t || t.length > 40) continue
+    if (/公司|商行|工厂|厂|经营部|商贸|贸易|实业|门市|经销|批发部/.test(t)) return t
+    if (!fallback && !t.startsWith('·') && t.length >= 4) fallback = t
+  }
+  return fallback
+}
+
 export default defineContentScript({
   // 宽匹配后按域名分流：
   //   detail.1688.com          → 跳过（win-content 负责）
@@ -28,6 +62,8 @@ export default defineContentScript({
     console.log(`[box] 分流结果: ${isListHost ? '列表页流程' : '供应商店铺页流程'}`)
 
     let scanCount = 0
+    // 已挂载但尚未随供应商名一起请求的商品（等店铺头部公司名就绪）
+    const pendingShopOffers = new Set()
     const pinia = createPinia()
 
     // ── Toast 提示 ──
@@ -48,7 +84,7 @@ export default defineContentScript({
     // ── 读取本地批量数据（IndexedDB，无网络）──
     let lastRequestFingerprint = ''
 
-    async function requestBatch(offerIds, tag) {
+    async function requestBatch(offerIds, tag, supplierMap = {}) {
       if (offerIds.length === 0) {
         console.log(`[box:${tag}] 本地批量读取跳过：无 offer_id`)
         return
@@ -68,8 +104,18 @@ export default defineContentScript({
       }
       lastRequestFingerprint = fingerprint
 
+      // 只透传新商品的供应商名
+      const newSupplierMap = {}
+      for (const id of newIds) {
+        const name = typeof supplierMap[id] === 'string' ? supplierMap[id].trim() : ''
+        if (name) newSupplierMap[id] = name
+      }
+
       try {
-        const res = await dataApi('/api/v1/products/batch_info', 'POST', { offer_ids: newIds })
+        const res = await dataApi('/api/v1/products/batch_info', 'POST', {
+          offer_ids: newIds,
+          supplier_map: newSupplierMap,
+        })
         if (res.code === 200) {
           Object.assign(batchCache, res.data)
           const count = Object.keys(res.data).length
@@ -143,14 +189,20 @@ export default defineContentScript({
         Array.from(document.querySelectorAll(`${cfg.parent} ${cfg.child}`))
       )
       const offerIds = new Set()
+      const supplierMap = {}
 
       allCards.forEach(card => {
         const id = extractOfferId(card)
-        if (id) offerIds.add(id)
+        if (id) {
+          offerIds.add(id)
+          // 刷出卡片时即提取供应商名，与产品一一对应
+          const name = extractSupplierName(card)
+          if (name) supplierMap[id] = name
+        }
       })
 
-      console.log(`[box:list] 列表页扫到 ${allCards.length} 张卡片，去重后 ${offerIds.size} 个 offer_id`)
-      await requestBatch([...offerIds], 'list')
+      console.log(`[box:list] 列表页扫到 ${allCards.length} 张卡片，去重后 ${offerIds.size} 个 offer_id，提取到供应商名 ${Object.keys(supplierMap).length} 个`)
+      await requestBatch([...offerIds], 'list', supplierMap)
     }
 
     const render = (parentSelector, childSelector) => {
@@ -224,20 +276,34 @@ export default defineContentScript({
       // 读取主世界扫描器标记的卡片根元素，逐个原子挂载
       const markedEls = document.querySelectorAll('[data-alocs-offer-id]')
       let mounted = 0
-      const mountedOffers = []
       for (const el of markedEls) {
         if (el.querySelector(':scope > .alocs-shop-mount')) continue
         const offerId = el.getAttribute('data-alocs-offer-id')
         mountCard(el, offerId, { keepWrapper: true, wrapperClass: 'alocs-shop-mount' })
-        mountedOffers.push(offerId)
+        pendingShopOffers.add(offerId)
         mounted++
       }
 
       if (mounted > 0) {
         console.log(`[box:shop] 第${scanCount}轮: 主世界已标记 ${markedEls.length} 张，本轮挂载 ${mounted} 张`)
-        requestBatch(mountedOffers, 'shop')
       } else if (scanCount === 1) {
         console.log(`[box:shop] 第1轮: 主世界已标记卡片 ${markedEls.length} 张，无需挂载`)
+      }
+
+      // 供应商名就绪后再请求，确保产品↔供应商映射随记录一起落库
+      if (pendingShopOffers.size === 0) return
+      const pageSupplier = getPageSupplierName()
+      const offerIds = [...pendingShopOffers]
+      if (pageSupplier) {
+        const supplierMap = Object.fromEntries(offerIds.map(id => [id, pageSupplier]))
+        pendingShopOffers.clear()
+        console.log(`[box:shop] 供应商「${pageSupplier}」就绪，请求 ${offerIds.length} 个商品`)
+        requestBatch(offerIds, 'shop', supplierMap)
+      } else if (scanCount >= 10) {
+        // 兜底：多轮仍取不到头部名，不无限期等待（无映射，计数为 0）
+        pendingShopOffers.clear()
+        console.log(`[box:shop] 多轮未取到供应商名，直接请求 ${offerIds.length} 个商品`)
+        requestBatch(offerIds, 'shop')
       }
     }
 

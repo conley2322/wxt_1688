@@ -37,6 +37,9 @@ const appearCount = computed(() => info.value?.appear_count ?? 0)
 const viewCount = computed(() => info.value?.view_count ?? 0)
 const iHaveViewed = computed(() => info.value?.i_have_viewed ?? false)
 
+// box2：供应商维度 —— 同供应商下我浏览过的商品数（去重，0 也显示）
+const supplierViewedCount = computed(() => info.value?.supplier_viewed_count ?? 0)
+
 // ── box1 双折线图：最近 14 天 出现次数 / 浏览次数（X=日期，Y=次数）──
 // 两个计数任一有记录就显示
 const hasChartData = computed(() => {
@@ -142,6 +145,20 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
     <div v-if="hasChartData" class="box-card box1-card">
       <div ref="chartEl" class="box1-chart"></div>
     </div>
+
+    <!-- box2：同供应商已看商品数（始终显示，无记录显示 0） -->
+    <div class="box-card box2-card">
+      <div class="box-row">
+        <span
+          class="box-stat box2-stat"
+          :style="{ color: supplierViewedCount > 0 ? '#c9975c' : '#bbb' }"
+          :title="`同供应商「${info?.supplier_name || '未知'}」已浏览 ${supplierViewedCount} 个商品`"
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          同供应商已看 {{ supplierViewedCount }} 个商品
+        </span>
+      </div>
+    </div>
   </template>
 </template>
 
@@ -193,5 +210,13 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
   width: 100%;
   height: 96px;
   margin-top: 2px;
+}
+/* ── box2：同供应商已看商品数 ── */
+.box2-card {
+  height: 24px;
+  padding: 2px 8px;
+}
+.box2-stat svg {
+  opacity: 0.6;
 }
 </style>

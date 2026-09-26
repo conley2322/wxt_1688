@@ -116,6 +116,8 @@ async function route(path, method, body, query) {
   // 因此收到请求 = 该商品本次刷出 → 出现次数 +1（与详情页浏览次数分开统计）
   if (path === '/api/v1/products/batch_info' && method === 'POST') {
     const uniqueIds = [...new Set(body.offer_ids || [])]
+    // 页面提取的供应商名（offer_id → 名称），在添加记录时与产品一一对应
+    const supplierMap = body.supplier_map || {}
     // 出现次数 +1（每个商品一条流水）
     for (const offer_id of uniqueIds) {
       await db.add('appear_records', { offer_id, appeared_at: Date.now() })
@@ -123,10 +125,23 @@ async function route(path, method, body, query) {
     const [products, records, comments, assigns, appears] = await Promise.all([
       db.all('products'), db.all('view_records'), db.all('comments'), db.all('tag_assign'), db.all('appear_records'),
     ])
+    // 有浏览记录的商品集合（box2 计数依据）
+    const viewedOfferIds = new Set(records.map(r => r.offer_id))
     const result = {}
     // 每个请求的商品都返回一条（未浏览过的返回 0），保证卡片一定能匹配到真实数据
     for (const offer_id of uniqueIds) {
       const p = products.find(x => x.offer_id === offer_id)
+      const pageSupplierName = typeof supplierMap[offer_id] === 'string' ? supplierMap[offer_id].trim() : ''
+      // 建立/补充 产品↔供应商 映射：列表刷出时即落库，无需等点进详情页
+      let supplierName = p?.supplier_name || ''
+      if (!supplierName && pageSupplierName) {
+        supplierName = pageSupplierName
+        if (p) {
+          await db.put('products', { ...p, supplier_name: pageSupplierName })
+        } else {
+          await db.put('products', { offer_id, title: '', main_img_url: '', supplier_name: pageSupplierName, created_at: Date.now() })
+        }
+      }
       const views = records.filter(r => r.offer_id === offer_id)
       const apps = appears.filter(r => r.offer_id === offer_id)
       const cmts = comments.filter(c => c.kind === 'product' && c.target === offer_id)
@@ -143,6 +158,11 @@ async function route(path, method, body, query) {
           view: views.filter(v => v.viewed_at >= dayStart && v.viewed_at < dayStart + DAY).length,
         })
       }
+      // box2：供应商维度 —— 按供应商名精确匹配，该供应商下我浏览过的商品数（去重）
+      const supplierViewedCount = supplierName
+        ? new Set(products.filter(x => x.supplier_name === supplierName && viewedOfferIds.has(x.offer_id)).map(x => x.offer_id)).size
+        : 0
+
       result[offer_id] = {
         appear_count: apps.length,
         view_count: views.length,
@@ -151,6 +171,8 @@ async function route(path, method, body, query) {
         i_have_viewed: views.length > 0,
         last_viewed_at: views.length ? Math.max(...views.map(v => v.viewed_at)) : null,
         my_views_timeline: timeline,
+        supplier_name: supplierName,
+        supplier_viewed_count: supplierViewedCount,
       }
     }
     return ok(result)
