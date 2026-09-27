@@ -40,7 +40,24 @@ const pageSwitches = ref({
 const storage = ref(null) // { usageMB, quotaMB, counts }
 const quotaInput = ref(100)
 const importing = ref(false)
-const cleaning = ref(false)
+const clearingStore = ref('') // 正在清理的数据类型（'' = 空闲）
+const keepDays = ref(30)
+
+// 数据清单：类型 → 展示名 / 说明 / 保护级 / 流水标记
+const storeRows = [
+  { store: 'profile', label: '个人资料', desc: '昵称、头像颜色', protect: true },
+  { store: 'comments', label: '我的笔记/评论', desc: '商品/供应商协作笔记，创作数据', protect: true },
+  { store: 'products', label: '商品信息', desc: '标题、图片、供应商名映射', cascade: true },
+  { store: 'suppliers', label: '供应商', desc: '店铺名称、地址、会员号' },
+  { store: 'updates', label: '更新日志', desc: '管理后台发布的更新公告' },
+  { store: 'view_records', label: '浏览记录', desc: '点进详情页记录，影响累计浏览/趋势图', flow: true },
+  { store: 'appear_records', label: '出现记录', desc: '列表页刷出记录，影响累计出现', flow: true },
+  { store: 'operation_logs', label: '操作日志', desc: '本机操作审计记录', flow: true },
+  { store: 'remote_snapshot', label: '服务器快照', desc: '他人共享数据缓存，下次同步自动恢复' },
+]
+
+// 清空商品时的级联选项弹窗（默认都不连带）
+const cascadeDialog = ref({ visible: false, count: 0, withRecords: false, withComments: false })
 
 async function loadStorage() {
   const res = await api('/api/v1/local/storage', 'GET')
@@ -56,16 +73,88 @@ async function saveQuota() {
   loadStorage()
 }
 
-async function runCleanup() {
-  cleaning.value = true
-  const res = await api('/api/v1/local/cleanup', 'POST', {})
-  cleaning.value = false
-  if (res.data?.cleaned) {
-    ElMessage.success(`清理完成，删除了 ${res.data.deleted} 条过期浏览记录`)
-  } else {
-    ElMessage.info('当前未超过存储上限，无需清理')
+// 逐类清空：保护类需输入 DELETE，商品类走级联弹窗，其余二次确认
+async function confirmClearStore(row) {
+  const count = storage.value.counts[row.store] ?? 0
+  if (count === 0) {
+    ElMessage.info(`「${row.label}」当前没有数据，无需清理`)
+    return
   }
-  loadStorage()
+  if (row.cascade) {
+    cascadeDialog.value = { visible: true, count, withRecords: false, withComments: false }
+    return
+  }
+  if (row.protect) {
+    try {
+      const { value } = await ElMessageBox.prompt(
+        `「${row.label}」属于建议保留数据，清空后无法恢复，建议先导出备份。\n\n如确认清空，请输入：`,
+        '高危操作确认',
+        {
+          confirmButtonText: '确认清空',
+          cancelButtonText: '取消',
+          inputPlaceholder: '输入 DELETE 确认',
+          inputPattern: /^DELETE$/,
+          inputErrorMessage: '请完整输入 DELETE',
+        }
+      )
+      if (value !== 'DELETE') return
+    } catch { return }
+  } else {
+    try {
+      await ElMessageBox.confirm(
+        `确定清空「${row.label}」？当前共 ${count} 条。\n该操作不可恢复，删除前建议先导出备份。`,
+        '清空确认',
+        { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }
+      )
+    } catch { return }
+  }
+  await doClearStore(row.store)
+}
+
+async function doClearStore(store) {
+  clearingStore.value = store
+  try {
+    const res = await api('/api/v1/local/clear-store', 'POST', { store })
+    if (res.code === 200) ElMessage.success(`已清空「${storeRows.find(r => r.store === store)?.label || store}」`)
+  } finally {
+    clearingStore.value = ''
+    loadStorage()
+  }
+}
+
+async function doClearProducts() {
+  clearingStore.value = 'products'
+  try {
+    const res = await api('/api/v1/local/clear-store', 'POST', {
+      store: 'products',
+      cascade: { records: cascadeDialog.value.withRecords, comments: cascadeDialog.value.withComments },
+    })
+    cascadeDialog.value.visible = false
+    const n = res.data?.counts?.products ?? 0
+    const tail = [
+      cascadeDialog.value.withRecords ? '连带流水' : '',
+      cascadeDialog.value.withComments ? '连带笔记' : '',
+    ].filter(Boolean).join('、')
+    ElMessage.success(`已清空 ${n} 个商品信息${tail ? '（' + tail + '）' : ''}`)
+  } finally {
+    clearingStore.value = ''
+    loadStorage()
+  }
+}
+
+// 快捷清理：保留最近 N 天的流水（浏览/出现/操作日志）
+async function runPrune() {
+  clearingStore.value = 'prune'
+  try {
+    const res = await api('/api/v1/local/prune', 'POST', { days: keepDays.value })
+    const d = res.data?.deleted || {}
+    const n = (d.view_records || 0) + (d.appear_records || 0) + (d.operation_logs || 0)
+    if (n > 0) ElMessage.success(`已清理 ${n} 条 ${keepDays.value} 天前的流水记录`)
+    else ElMessage.info(`没有早于最近 ${keepDays.value} 天的流水记录`)
+  } finally {
+    clearingStore.value = ''
+    loadStorage()
+  }
 }
 
 async function exportData() {
@@ -431,14 +520,52 @@ async function autoSave() {
             :color="storage.usageMB / storage.quotaMB > 0.8 ? '#e74c3c' : '#c9975c'"
           />
         </el-form-item>
-        <el-form-item label="数据条数">
-          <span class="storage-counts">
-            商品 {{ storage.counts.products }} · 浏览记录 {{ storage.counts.view_records }} · 评论 {{ storage.counts.comments }} · 供应商 {{ storage.counts.suppliers }}
-          </span>
+        <el-form-item label="数据清单">
+          <el-table :data="storeRows" size="small" border style="width:100%">
+            <el-table-column label="分类" width="120">
+              <template #default="{ row }">{{ row.label }}</template>
+            </el-table-column>
+            <el-table-column label="说明 / 删除影响" min-width="190">
+              <template #default="{ row }">
+                <span class="store-desc">{{ row.desc }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="条数" width="70" align="right">
+              <template #default="{ row }">{{ storage.counts[row.store] ?? 0 }}</template>
+            </el-table-column>
+            <el-table-column label="建议" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="row.protect" size="small" type="warning">建议保留</el-tag>
+                <el-tag v-else-if="row.flow" size="small" type="success">流水可清</el-tag>
+                <span v-else style="color:#909399;font-size:12px">可清理</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="80" align="center">
+              <template #default="{ row }">
+                <el-button
+                  size="small" text type="danger"
+                  :disabled="!!clearingStore"
+                  @click="confirmClearStore(row)"
+                >清空</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="switch-desc" style="margin-top:6px">
+            清空不可恢复，请先「导出备份」。带「建议保留」标签的为配置 / 创作数据，删除需输入 DELETE 确认；商品信息清空时可选择是否连带清理流水与笔记。
+          </div>
+        </el-form-item>
+        <el-form-item label="快捷清理">
+          <el-radio-group v-model="keepDays" :disabled="!!clearingStore">
+            <el-radio-button :value="7">7天</el-radio-button>
+            <el-radio-button :value="30">30天</el-radio-button>
+            <el-radio-button :value="90">90天</el-radio-button>
+          </el-radio-group>
+          <el-button type="warning" plain :loading="clearingStore === 'prune'" @click="runPrune" style="margin-left:10px">清理更早的流水</el-button>
+          <div class="switch-desc">只删除「浏览 / 出现记录 / 操作日志」中 N 天以前的数据，商品与评论不受影响</div>
         </el-form-item>
         <el-form-item label="自动清理上限">
           <el-input-number v-model="quotaInput" :min="10" :max="1024" :step="10" @change="saveQuota" />
-          <span style="margin-left:8px;color:#999;font-size:12px">MB — 超过上限时自动删除最旧的浏览记录（评论不受影响）</span>
+          <span style="margin-left:8px;color:#999;font-size:12px">MB — 超过上限时自动删除最旧的浏览/出现记录（评论不受影响）</span>
         </el-form-item>
         <el-form-item label="迁移备份">
           <el-button type="primary" plain @click="exportData">导出备份文件</el-button>
@@ -446,10 +573,26 @@ async function autoSave() {
             <input type="file" accept=".json" style="display:none" @change="onImportFile" />
             <el-button type="success" plain :loading="importing">导入备份文件</el-button>
           </label>
-          <el-button type="warning" plain :loading="cleaning" @click="runCleanup">立即清理</el-button>
         </el-form-item>
       </el-form>
       <div v-else style="color:#999;font-size:13px">读取存储信息中...</div>
+
+      <!-- 清空商品信息的级联确认弹窗（默认都不连带） -->
+      <el-dialog v-model="cascadeDialog.visible" title="清空商品信息" width="460px">
+        <div style="color:#606266;line-height:1.7;font-size:13px">
+          确认清空全部 <b>{{ cascadeDialog.count }}</b> 个商品信息？该操作不可恢复，建议先导出备份。
+        </div>
+        <div style="margin-top:14px">
+          <el-checkbox v-model="cascadeDialog.withRecords">连带删除这些商品的浏览 / 出现记录（累计浏览、累计出现会归零）</el-checkbox>
+        </div>
+        <div style="margin-top:8px">
+          <el-checkbox v-model="cascadeDialog.withComments">连带删除这些商品的我的笔记（商品评论）</el-checkbox>
+        </div>
+        <template #footer>
+          <el-button @click="cascadeDialog.visible = false">取消</el-button>
+          <el-button type="danger" :loading="clearingStore === 'products'" @click="doClearProducts">确认清空</el-button>
+        </template>
+      </el-dialog>
     </el-card>
 
     <!-- 富文本工具栏配置 -->
@@ -474,6 +617,6 @@ async function autoSave() {
 .page-title { font-size: 20px; font-weight: 600; color: #303133; margin: 0 0 20px; }
 .switch-desc { font-size: 12px; color: #909399; margin-top: 4px; }
 .storage-usage { font-size: 16px; font-weight: 700; color: #303133; }
-.storage-counts { font-size: 13px; color: #606266; }
+.store-desc { font-size: 12px; color: #909399; }
 .import-btn { margin: 0 12px; }
 </style>

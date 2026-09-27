@@ -47,11 +47,6 @@ const hasOthers = computed(() =>
   others.value.view_count > 0 || others.value.appear_count > 0 || othersComments.value.length > 0
 )
 
-// 跳转商品详情页（无论原卡片是否带链接，box 面板始终提供入口）
-function goProduct() {
-  window.open(`https://detail.1688.com/offer/${offer_id}.html`, '_blank', 'noopener')
-}
-
 // 留言时间格式化
 function fmtTime(iso) {
   const d = new Date(iso)
@@ -207,9 +202,6 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
             他人浏览 {{ others.view_count }}
           </span>
         </template>
-
-        <!-- 跳转商品（无论原卡片是否有链接，始终提供） -->
-        <span class="go-link" @click="goProduct">跳转商品 ↗</span>
       </div>
     </div>
 
@@ -304,18 +296,6 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
 }
 .others-stat svg {
   opacity: 0.7;
-}
-/* 跳转商品链接：靠右 */
-.go-link {
-  margin-left: auto;
-  font-size: 11px;
-  color: #ff6a00;
-  cursor: pointer;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.go-link:hover {
-  text-decoration: underline;
 }
 /* ── box3：团队留言 ── */
 .box3-card {

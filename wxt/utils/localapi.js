@@ -2,7 +2,7 @@
 // 拦截原后端的所有 /api/v1/* 路径，在 IndexedDB 上实现同名接口，
 // 返回结构与原后端一致（{ code, data, total... }），页面代码无需大改。
 
-import { db, uid, getProfile, saveProfile, storageInfo, getQuotaMB, setQuotaMB, cleanupIfNeeded, exportData, importData } from './localdb.js'
+import { db, uid, getProfile, saveProfile, storageInfo, getQuotaMB, setQuotaMB, cleanupIfNeeded, exportData, importData, clearStore, clearProducts, pruneStore, STORES } from './localdb.js'
 
 const DAY = 86400000
 
@@ -138,6 +138,31 @@ async function route(path, method, body, query) {
   }
   if (path === '/api/v1/local/cleanup' && method === 'POST') {
     return ok(await cleanupIfNeeded())
+  }
+  // 按类型清空数据（用户自主抉择）：POST /api/v1/local/clear-store  { store, cascade? }
+  if (path === '/api/v1/local/clear-store' && method === 'POST') {
+    const { store, cascade } = body || {}
+    if (store === 'products') {
+      const r = await clearProducts({ withRecords: !!cascade?.records, withComments: !!cascade?.comments })
+      await log('POST /api/v1/local/clear-store',
+        `清空商品信息 ${r.products} 个${r.records ? `，连带流水 ${r.records} 条` : ''}${r.comments ? `，连带商品笔记 ${r.comments} 条` : ''}`)
+    } else if (STORES[store] !== undefined) {
+      const n = await clearStore(store)
+      await log('POST /api/v1/local/clear-store', `清空「${store}」共 ${n} 条`)
+    } else {
+      return { code: 400, message: '未知的数据类型: ' + store }
+    }
+    return ok(await storageInfo())
+  }
+  // 保留最近 N 天的流水（浏览/出现/操作日志），只删更早的：POST /api/v1/local/prune  { days }
+  if (path === '/api/v1/local/prune' && method === 'POST') {
+    const days = Math.max(1, parseInt(body.days) || 30)
+    const deleted = {}
+    for (const s of ['view_records', 'appear_records', 'operation_logs']) {
+      deleted[s] = await pruneStore(s, days)
+    }
+    await log('POST /api/v1/local/prune', `保留最近 ${days} 天流水，清理浏览 ${deleted.view_records}/出现 ${deleted.appear_records}/日志 ${deleted.operation_logs} 条`)
+    return ok({ deleted, ...(await storageInfo()) })
   }
   if (path === '/api/v1/local/export' && method === 'POST') {
     return ok(await exportData())

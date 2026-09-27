@@ -20,6 +20,8 @@ export const STORES = {
 
 let dbPromise = null
 
+const DAY = 86400000
+
 function openDB() {
   if (dbPromise) return dbPromise
   dbPromise = new Promise((resolve, reject) => {
@@ -161,6 +163,47 @@ export async function cleanupIfNeeded() {
     }
   }
   return { cleaned: true, deleted, ...info }
+}
+
+// 各时间型 store 对应的时间字段（按时间清理用）
+const STORE_TIME_KEYS = {
+  view_records: 'viewed_at',
+  appear_records: 'appeared_at',
+  operation_logs: 'created_at',
+}
+
+// 清空某一类数据（返回删除条数）
+export async function clearStore(store) {
+  const { keys } = await getAllWithKeys(store)
+  for (const k of keys) await db.delete(store, k)
+  return keys.length
+}
+
+// 清空商品信息；可选项连带清理：
+//   withRecords  连带删这些商品的浏览/出现流水（累计浏览/出现归零）
+//   withComments 连带删这些商品的我的笔记（商品评论）
+// 默认两者都不连带（统计与笔记保留，仅商品标题/图片/供应商映射丢失）
+export async function clearProducts({ withRecords = false, withComments = false } = {}) {
+  const all = await db.all('products')
+  const ids = all.map(p => p.offer_id)
+  for (const id of ids) await db.delete('products', id)
+  let records = 0, comments = 0
+  if (ids.length && withRecords) {
+    records += await db.deleteWhere('view_records', r => r.offer_id && ids.includes(r.offer_id))
+    records += await db.deleteWhere('appear_records', r => r.offer_id && ids.includes(r.offer_id))
+  }
+  if (ids.length && withComments) {
+    comments += await db.deleteWhere('comments', c => c.kind === 'product' && ids.includes(c.target))
+  }
+  return { products: ids.length, records, comments }
+}
+
+// 保留某时间型 store 最近 keepDays 天的数据，只删更早的（返回删除条数）
+export async function pruneStore(store, keepDays = 30) {
+  const timeKey = STORE_TIME_KEYS[store]
+  if (!timeKey) return 0
+  const cut = Date.now() - keepDays * DAY
+  return db.deleteWhere(store, r => (r[timeKey] || 0) < cut)
 }
 
 // ════════════════════════════════════
