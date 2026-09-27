@@ -67,6 +67,15 @@ export const db = {
   add: (store, value) => openDB().then(d => req(d.transaction(store, 'readwrite').objectStore(store).add(value))),
   delete: (store, key) => openDB().then(d => req(d.transaction(store, 'readwrite').objectStore(store).delete(key))),
   clear: (store) => openDB().then(d => req(d.transaction(store, 'readwrite').objectStore(store).clear())),
+  // 按条件删除（自增 store 无法按字段直接删，取全部键值后逐个删除），返回删除条数
+  deleteWhere: async (store, predicate) => {
+    const { keys, rows } = await getAllWithKeys(store)
+    let n = 0
+    for (let i = 0; i < rows.length; i++) {
+      if (predicate(rows[i])) { await db.delete(store, keys[i]); n++ }
+    }
+    return n
+  },
 }
 
 export function uid() {

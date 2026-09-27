@@ -78,9 +78,6 @@ export default defineContentScript({
     // 共享的本地数据缓存（offer_id → 卡片信息）
     const batchCache = reactive({})
 
-    // box1 图表类型：line=折线图（默认）| bar=柱状图（后台设置）
-    let box1ChartType = 'line'
-
     // ── 读取本地批量数据（IndexedDB，无网络）──
     let lastRequestFingerprint = ''
 
@@ -139,8 +136,7 @@ export default defineContentScript({
       const app = createApp(App, {
         parentEl: item,
         offerId,
-        batchCache,
-        chartType: box1ChartType
+        batchCache
       })
       app.use(pinia)
       app.mount(container)
@@ -238,8 +234,7 @@ export default defineContentScript({
           s.enableOfferList !== false ? renderConfigs[1] : null,
           s.enableHomeRecommend !== false ? renderConfigs[2] : null,
         ].filter(Boolean)
-        box1ChartType = ['bar', 'line'].includes(s.box1ChartType) ? s.box1ChartType : 'line'
-        console.log(`[box:list] 渲染开关: search=${s.enableSearchList !== false}, offerList=${s.enableOfferList !== false}, home=${s.enableHomeRecommend !== false}；box1图表: ${box1ChartType}`)
+        console.log(`[box:list] 渲染开关: search=${s.enableSearchList !== false}, offerList=${s.enableOfferList !== false}, home=${s.enableHomeRecommend !== false}`)
       } catch (e) {
         console.error('[box:list] 读取设置失败:', e)
       }
@@ -268,7 +263,6 @@ export default defineContentScript({
           if (scanCount === 1) console.log('[box:shop] 店铺页渲染已被设置关闭（enableShopPage=false），不注入')
           return
         }
-        box1ChartType = ['bar', 'line'].includes(s.box1ChartType) ? s.box1ChartType : 'line'
       } catch (e) {
         console.error('[box:shop] 读取设置失败:', e)
       }

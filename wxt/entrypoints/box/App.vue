@@ -2,13 +2,13 @@
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { GridComponent, TooltipComponent, AxisPointerComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
 // box1 图表按需引入（减小打包体积）
-echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, AxisPointerComponent, CanvasRenderer])
 
-const props = defineProps(['parentEl', 'offerId', 'batchCache', 'chartType'])
+const props = defineProps(['parentEl', 'offerId', 'batchCache'])
 
 // 父元素自适应
 if (props.parentEl) {
@@ -40,71 +40,101 @@ const iHaveViewed = computed(() => info.value?.i_have_viewed ?? false)
 // box2：供应商维度 —— 同供应商下我浏览过的商品数（去重，0 也显示）
 const supplierViewedCount = computed(() => info.value?.supplier_viewed_count ?? 0)
 
-// ── box1 双折线图：最近 14 天 出现次数 / 浏览次数（X=日期，Y=次数）──
-// 两个计数任一有记录就显示
-const hasChartData = computed(() => {
+// ── box1 上下双图：上「出现」面积折线 / 下「浏览」细柱，共享时间轴联动 ──
+// 固定展示近 30 天（数据源为近 50 天，前端切片）
+const slicedTimeline = computed(() => {
   const t = info.value?.my_views_timeline
-  return !!t && t.some(x => x.appear > 0 || x.view > 0)
+  return t ? t.slice(-30) : []
 })
+// 近 30 天两个计数任一有记录就显示
+const hasChartData = computed(() => slicedTimeline.value.some(x => x.appear > 0 || x.view > 0))
+
 const chartEl = ref(null)
 let chartInstance = null
 
 function renderChart() {
-  const timeline = info.value?.my_views_timeline
-  // 没有任何数据的商品不渲染图表（避免空图表区）
-  if (!chartEl.value || !timeline || !timeline.some(t => t.appear > 0 || t.view > 0)) {
+  const timeline = slicedTimeline.value
+  // 切片为空时不渲染（正常不会发生：hasChartData 基于 50 天数据判定）
+  if (!chartEl.value || timeline.length === 0) {
     if (chartInstance) { chartInstance.dispose(); chartInstance = null }
     return
   }
   if (!chartInstance) {
     chartInstance = echarts.init(chartEl.value)
   }
-  const isLine = props.chartType !== 'bar'
-  const common = { smooth: true, symbolSize: 4, barMaxWidth: 8 }
+  const dates = timeline.map(t => t.date)
+  // 日期刻度稀疏化：约 5~6 个刻度点
+  const labelInterval = Math.floor(timeline.length / 5)
+  const hideAxis = { show: false }
   chartInstance.setOption({
-    grid: { left: 26, right: 6, top: 22, bottom: 18 },
-    legend: {
-      top: 0, right: 0, itemWidth: 10, itemHeight: 8,
-      textStyle: { fontSize: 8, color: '#9ca3af' },
-      data: ['出现', '浏览']
+    // 两个 grid：上 86px 高（出现），下 60px 高（浏览），间距 6px
+    grid: [
+      { left: 30, right: 8, top: 2, height: 86 },
+      { left: 30, right: 8, top: 94, height: 60 }
+    ],
+    // 悬停时上下竖向指示线联动
+    axisPointer: {
+      link: [{ xAxisIndex: 'all' }],
+      label: { show: false },
+      lineStyle: { color: '#c0c4cc', type: 'dashed' }
     },
     tooltip: {
       trigger: 'axis',
       textStyle: { fontSize: 11 },
-      formatter: ps => `${ps[0].axisValue}<br/>${ps.map(p => `${p.seriesName} ${p.value} 次`).join('<br/>')}`
+      // params 只含当前 grid 系列，用 dataIndex 回查两类数据
+      formatter: ps => {
+        const t = timeline[ps[0].dataIndex]
+        return `${t.date}<br/>出现 ${t.appear} 次<br/>浏览 ${t.view} 次`
+      }
     },
-    xAxis: {
-      type: 'category',
-      data: timeline.map(t => t.date),
-      axisLabel: { fontSize: 8, interval: 3, color: '#9ca3af' },
-      axisLine: { lineStyle: { color: '#e5e7eb' } },
-      axisTick: { show: false }
-    },
-    yAxis: {
-      type: 'value',
-      minInterval: 1,
-      axisLabel: { fontSize: 8, color: '#9ca3af' },
-      splitLine: { lineStyle: { color: '#f3f4f6' } }
-    },
+    xAxis: [
+      {
+        type: 'category', data: dates, gridIndex: 0,
+        axisLabel: hideAxis, axisLine: hideAxis, axisTick: hideAxis
+      },
+      {
+        type: 'category', data: dates, gridIndex: 1,
+        axisLabel: { fontSize: 8, interval: labelInterval, color: '#9ca3af' },
+        axisLine: { lineStyle: { color: '#e5e7eb' } },
+        axisTick: { show: false }
+      }
+    ],
+    yAxis: [
+      {
+        type: 'value', minInterval: 1, gridIndex: 0,
+        axisLabel: { fontSize: 8, color: '#b0b7c3' },
+        splitLine: { lineStyle: { color: '#f3f4f6' } }
+      },
+      {
+        type: 'value', minInterval: 1, gridIndex: 1,
+        axisLabel: { fontSize: 8, color: '#c9b08c' },
+        splitLine: { lineStyle: { color: '#f7f4ef' } }
+      }
+    ],
     series: [
       {
         name: '出现',
-        type: isLine ? 'line' : 'bar',
+        type: 'line',
+        xAxisIndex: 0, yAxisIndex: 0,
         data: timeline.map(t => t.appear),
-        color: '#8faedd',
-        ...common,
-        lineStyle: { width: 2, color: '#8faedd' },
-        itemStyle: { color: '#8faedd', ...(isLine ? {} : { borderRadius: [3, 3, 0, 0] }) },
-        areaStyle: isLine ? { opacity: 0.15 } : undefined,
+        smooth: true,
+        symbol: 'none',
+        lineStyle: { width: 1.5, color: '#8faedd' },
+        itemStyle: { color: '#8faedd' },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(143,174,221,0.32)' },
+            { offset: 1, color: 'rgba(143,174,221,0.02)' }
+          ])
+        }
       },
       {
         name: '浏览',
-        type: isLine ? 'line' : 'bar',
+        type: 'bar',
+        xAxisIndex: 1, yAxisIndex: 1,
         data: timeline.map(t => t.view),
-        color: '#c9975c',
-        ...common,
-        lineStyle: { width: 2, color: '#c9975c' },
-        itemStyle: { color: '#c9975c' },
+        barMaxWidth: 6,
+        itemStyle: { color: '#c9975c', borderRadius: [2, 2, 0, 0] }
       }
     ]
   }, true)
@@ -113,7 +143,6 @@ function renderChart() {
 onMounted(() => nextTick(renderChart))
 onUnmounted(() => { chartInstance?.dispose(); chartInstance = null })
 watch(() => info.value?.my_views_timeline, () => nextTick(renderChart))
-watch(() => props.chartType, () => nextTick(renderChart))
 watch(hasChartData, (v) => { if (v) nextTick(renderChart) })
 
 // 小圆点颜色：绿色=看过，灰色=没看过
@@ -141,7 +170,7 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
       </div>
     </div>
 
-    <!-- box1：双折线图（最近 14 天 出现/浏览），有记录才出现 -->
+    <!-- box1：上下双图（出现面积折线 / 浏览细柱，近 30 天），有记录才出现 -->
     <div v-if="hasChartData" class="box-card box1-card">
       <div ref="chartEl" class="box1-chart"></div>
     </div>
@@ -200,7 +229,7 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
   opacity: 0.5;
   flex-shrink: 0;
 }
-/* ── box1：双折线图 ── */
+/* ── box1：上下双图（出现面积折线 / 浏览细柱）── */
 .box1-card {
   height: auto;
   padding: 4px 8px 2px;
@@ -208,8 +237,7 @@ const dotColor = computed(() => (iHaveViewed.value ? '#52c41a' : '#d9d9d9'))
 }
 .box1-chart {
   width: 100%;
-  height: 96px;
-  margin-top: 2px;
+  height: 176px;
 }
 /* ── box2：同供应商已看商品数 ── */
 .box2-card {

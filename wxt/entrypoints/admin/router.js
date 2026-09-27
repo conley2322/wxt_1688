@@ -4,10 +4,12 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 const routes = [
   { path: '/', redirect: '/dashboard' },
   { path: '/dashboard', component: () => import('./pages/Dashboard.vue'), meta: { title: '概览' } },
-  { path: '/products', component: () => import('./pages/ProductManage.vue'), meta: { title: '商品管理' } },
+  { path: '/sources', component: () => import('./pages/MySources.vue'), meta: { title: '我的货源' } },
+  // 旧路径兼容（商品/供应商管理已合并为「我的货源」）
+  { path: '/products', redirect: '/sources' },
+  { path: '/suppliers', redirect: '/sources' },
   { path: '/updates', component: () => import('./pages/UpdateManage.vue'), meta: { title: '更新日志' } },
   { path: '/updates/publish', component: () => import('./pages/UpdateEditor.vue'), meta: { title: '发布更新' } },
-  { path: '/suppliers', component: () => import('./pages/SupplierManage.vue'), meta: { title: '供应商管理' } },
   { path: '/operations', component: () => import('./pages/OperationLogs.vue'), meta: { title: '操作记录' } },
   { path: '/settings', component: () => import('./pages/SettingsPage.vue'), meta: { title: '系统设置' } },
   { path: '/profile', component: () => import('./pages/ProfilePage.vue'), meta: { title: '个人中心' } },

@@ -42,6 +42,14 @@ async function upsertProduct(offer_id, title, main_img_url, supplier_name) {
   return db.get('products', offer_id)
 }
 
+// 连带删除单个商品的全部数据：浏览/出现流水 + 商品评论 + 商品本体
+async function purgeProduct(offer_id) {
+  await db.deleteWhere('view_records', r => r.offer_id === offer_id)
+  await db.deleteWhere('appear_records', r => r.offer_id === offer_id)
+  await db.deleteWhere('comments', c => c.kind === 'product' && c.target === offer_id)
+  await db.delete('products', offer_id)
+}
+
 // ════════════════════════════════════
 // 路由表
 // ════════════════════════════════════
@@ -136,10 +144,10 @@ async function route(path, method, body, query) {
       const views = records.filter(r => r.offer_id === offer_id)
       const apps = appears.filter(r => r.offer_id === offer_id)
       const cmts = comments.filter(c => c.kind === 'product' && c.target === offer_id)
-      // 最近 14 天按天聚合（box1 双折线图数据源：出现 + 浏览）
+      // 最近 50 天按天聚合（box1 上下双图数据源：出现 + 浏览，前端按需切片 7/15/20/30/50）
       const timeline = []
       const today = new Date(); today.setHours(0, 0, 0, 0)
-      for (let i = 13; i >= 0; i--) {
+      for (let i = 49; i >= 0; i--) {
         const dayStart = today.getTime() - i * DAY
         const label = `${String(new Date(dayStart).getMonth() + 1).padStart(2, '0')}-${String(new Date(dayStart).getDate()).padStart(2, '0')}`
         timeline.push({
@@ -213,6 +221,123 @@ async function route(path, method, body, query) {
     return ok(result.slice((pageNum - 1) * pageSize, pageNum * pageSize), { total, stats: statsOverview })
   }
 
+  // ── 我的货源：供应商分组 + 组内全部商品（合并页数据源）──  // GET /api/v1/products/grouped
+  if (path === '/api/v1/products/grouped' && method === 'GET') {
+    const [products, records, comments, appears, suppliersTable] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('comments'), db.all('appear_records'), db.all('suppliers'),
+    ])
+    // 浏览计数 / 最近浏览
+    const viewCountMap = {}
+    const lastView = {}
+    for (const r of records) {
+      viewCountMap[r.offer_id] = (viewCountMap[r.offer_id] || 0) + 1
+      lastView[r.offer_id] = Math.max(lastView[r.offer_id] || 0, r.viewed_at)
+    }
+    // 出现计数
+    const appearCountMap = {}
+    for (const a of appears) appearCountMap[a.offer_id] = (appearCountMap[a.offer_id] || 0) + 1
+    // 商品评论 / 供应商评论（按 target 归组）
+    const productCommentMap = {}
+    const supplierCommentMap = {}
+    for (const c of comments) {
+      if (c.kind === 'product') (productCommentMap[c.target] ||= []).push(c)
+      if (c.kind === 'supplier') (supplierCommentMap[c.target] ||= []).push(c)
+    }
+    // 供应商集合：浏览过的商品所属供应商 ∪ suppliers 表 ∪ 有供应商评论的
+    const viewedIds = new Set(records.map(r => r.offer_id))
+    const names = new Set()
+    for (const p of products) if (p.supplier_name && viewedIds.has(p.offer_id)) names.add(p.supplier_name)
+    for (const s of suppliersTable) names.add(s.name)
+    for (const name of Object.keys(supplierCommentMap)) names.add(name)
+
+    let groups = [...names].filter(Boolean).map(name => {
+      const supCmts = (supplierCommentMap[name] || [])
+        .slice()
+        .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at))
+      const prods = products
+        .filter(p => p.supplier_name === name && viewedIds.has(p.offer_id))
+        .map(p => {
+          const cs = productCommentMap[p.offer_id] || []
+          return {
+            offer_id: p.offer_id,
+            title: p.title,
+            main_img_url: p.main_img_url,
+            view_count: viewCountMap[p.offer_id] || 0,
+            appear_count: appearCountMap[p.offer_id] || 0,
+            comment_count: cs.length,
+            my_comment: cs[0]?.text || null,
+            last_viewed_at: lastView[p.offer_id] || null,
+          }
+        })
+      // 组内：有笔记的在前，再按最近浏览降序
+      prods.sort((a, b) => Number(b.comment_count > 0) - Number(a.comment_count > 0)
+        || (b.last_viewed_at || 0) - (a.last_viewed_at || 0))
+      return {
+        supplier_name: name,
+        comment_count: supCmts.length,
+        supplier_comments: supCmts,
+        products: prods,
+        product_count: prods.length,
+        last_activity: Math.max(
+          ...prods.map(p => p.last_viewed_at || 0),
+          ...supCmts.map(c => new Date(c.updated_at || c.created_at).getTime()),
+          0
+        ),
+      }
+    })
+    const groupHasNotes = g => g.comment_count > 0 || g.products.some(p => p.comment_count > 0)
+    // 组排序：有笔记的在前，再按最近活动降序
+    groups.sort((a, b) => Number(groupHasNotes(b)) - Number(groupHasNotes(a)) || b.last_activity - a.last_activity)
+
+    // 搜索：供应商名或商品标题
+    if (query.search) {
+      const kw = query.search.toLowerCase()
+      groups = groups.filter(g =>
+        g.supplier_name.toLowerCase().includes(kw)
+        || g.products.some(p => p.title?.toLowerCase().includes(kw)))
+    }
+
+    const stats = {
+      total_suppliers: groups.length,
+      suppliers_with_notes: groups.filter(groupHasNotes).length,
+      total_products: groups.reduce((s, g) => s + g.product_count, 0),
+      products_with_notes: groups.reduce((s, g) => s + g.products.filter(p => p.comment_count > 0).length, 0),
+      total_views: records.length,
+      total_appears: appears.length,
+    }
+    return ok(groups, { stats })
+  }
+
+  // ── 删除商品（连带浏览/出现流水和商品评论）──  // DELETE /api/v1/products/:id
+  const mProductDelete = path.match(/^\/api\/v1\/products\/([^/]+)$/)
+  if (mProductDelete && method === 'DELETE') {
+    const offer_id = decodeURIComponent(mProductDelete[1])
+    await purgeProduct(offer_id)
+    await log('DELETE /api/v1/products/:id', `删除了商品 ${offer_id} 及其全部数据`)
+    return ok(null)
+  }
+
+  // ── 批量删除商品 ──  // POST /api/v1/products/batch-delete
+  if (path === '/api/v1/products/batch-delete' && method === 'POST') {
+    const ids = [...new Set(body.offer_ids || [])]
+    for (const id of ids) await purgeProduct(id)
+    await log('POST /api/v1/products/batch-delete', `批量删除了 ${ids.length} 个商品`)
+    return ok({ deleted: ids.length })
+  }
+
+  // ── 删除供应商（连带名下商品全部数据 + 供应商评论）──  // DELETE /api/v1/suppliers/:name
+  const mSupplierDelete = path.match(/^\/api\/v1\/suppliers\/([^/]+)$/)
+  if (mSupplierDelete && method === 'DELETE') {
+    const name = decodeURIComponent(mSupplierDelete[1])
+    const prods = await db.all('products')
+    const ids = [...new Set(prods.filter(p => p.supplier_name === name).map(p => p.offer_id))]
+    for (const id of ids) await purgeProduct(id)
+    await db.deleteWhere('comments', c => c.kind === 'supplier' && c.target === name)
+    await db.delete('suppliers', name)
+    await log('DELETE /api/v1/suppliers/:name', `删除了供应商「${name}」及名下 ${ids.length} 个商品`)
+    return ok(null)
+  }
+
   // ── 商品数据统计 ──  // GET /api/v1/products/:id/stats
   const mProductStats = path.match(/^\/api\/v1\/products\/([^/]+)\/stats$/)
   if (mProductStats && method === 'GET') {
@@ -256,6 +381,8 @@ async function route(path, method, body, query) {
       },
       first_viewed_at: views.length ? Math.min(...views.map(v => v.viewed_at)) : null,
       last_viewed_at: views.length ? Math.max(...views.map(v => v.viewed_at)) : null,
+      // 每次浏览的精确时间（降序），供管理页浏览时间线使用
+      view_times: views.map(v => v.viewed_at).sort((a, b) => b - a),
       supplier_name: supplierName,
       supplier_viewed_count: supplierViewedCount,
       daily,
@@ -455,6 +582,17 @@ function hasCommentContent(html) {
 
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
+  {
+    id: 'builtin-0.3.0', version: '0.3.0', title: '我的货源合并页 · 删除与批量管理', status: 'published',
+    created_at: '2026-09-27T12:00:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>商品管理与供应商管理合并为「我的货源」：以供应商分组、手风琴展开，有笔记的供应商和商品自动置顶，不用再翻页查找</li>'
+      + '<li>新增单个删除与批量管理：商品、供应商均可删除，关联的浏览记录、出现记录、笔记连带清除（删除前二次确认）</li>'
+      + '<li>商品详情抽屉：出现/浏览/笔记总数、首次与最近浏览时间、近 30 天每日记录、每次浏览的精确时间线一目了然</li>'
+      + '<li>列表卡片图表优化为上下双图（出现面积趋势 + 浏览时间柱），固定近 30 天，去除被遮挡的悬浮切换条</li>'
+      + '<li>下线已失效的「box1 图表样式」设置项</li>'
+      + '</ul>',
+  },
   {
     id: 'builtin-0.2.2', version: '0.2.2', title: '链接净化 · 自动保存笔记 · 数据统计页', status: 'published',
     created_at: '2026-09-27T00:00:00.000Z', created_by: 'Conley',

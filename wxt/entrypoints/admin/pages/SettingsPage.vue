@@ -1,13 +1,7 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app.js'
-import * as echarts from 'echarts/core'
-import { LineChart, BarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
-
-echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const appStore = useAppStore()
 
@@ -36,82 +30,6 @@ const pageSwitches = ref({
   enableStopLoading: true,
   enableCleanUrl: true,
 })
-
-// box1 图表类型：bar=柱状图 / line=折线图
-const box1ChartType = ref('line')
-
-// ── box1 图表样式预览（虚拟数据）──
-const chartPreviewEl = ref(null)
-let chartInstance = null
-
-// 生成最近 14 天示意数据（固定走势，方便对比两种样式）
-const previewDates = []
-const previewAppear = []
-const previewView = []
-{
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(today.getTime() - i * 86400000)
-    previewDates.push(`${d.getMonth() + 1}/${d.getDate()}`)
-  }
-  // 示意数据：出现次数整体偏高，浏览次数偏低
-  previewAppear.push(3, 5, 2, 7, 4, 6, 8, 5, 9, 6, 4, 7, 5, 3)
-  previewView.push(1, 0, 2, 1, 3, 1, 2, 4, 2, 3, 1, 2, 3, 1)
-}
-
-function renderPreviewChart() {
-  if (!chartPreviewEl.value) return
-  if (!chartInstance) chartInstance = echarts.init(chartPreviewEl.value)
-  const isLine = box1ChartType.value !== 'bar'
-  const common = { smooth: true, symbolSize: 6, barMaxWidth: 16 }
-  chartInstance.setOption({
-    grid: { left: 36, right: 12, top: 30, bottom: 28 },
-    legend: {
-      top: 0, right: 0, itemWidth: 12, itemHeight: 8,
-      textStyle: { fontSize: 12, color: '#909399' },
-      data: ['出现', '浏览']
-    },
-    tooltip: {
-      trigger: 'axis',
-      textStyle: { fontSize: 12 },
-      formatter: ps => `${ps[0].axisValue}<br/>${ps.map(p => `${p.seriesName} ${p.value} 次`).join('<br/>')}`
-    },
-    xAxis: {
-      type: 'category',
-      data: previewDates,
-      axisLabel: { fontSize: 11, interval: 1, color: '#909399' },
-      axisLine: { lineStyle: { color: '#e5e7eb' } },
-      axisTick: { show: false }
-    },
-    yAxis: {
-      type: 'value',
-      minInterval: 1,
-      axisLabel: { fontSize: 11, color: '#909399' },
-      splitLine: { lineStyle: { color: '#f3f4f6' } }
-    },
-    series: [
-      {
-        name: '出现',
-        type: isLine ? 'line' : 'bar',
-        data: previewAppear,
-        color: '#8faedd',
-        ...common,
-        lineStyle: { width: 2, color: '#8faedd' },
-        itemStyle: { color: '#8faedd', ...(isLine ? {} : { borderRadius: [4, 4, 0, 0] }) },
-        areaStyle: isLine ? { opacity: 0.15 } : undefined,
-      },
-      {
-        name: '浏览',
-        type: isLine ? 'line' : 'bar',
-        data: previewView,
-        color: '#c9975c',
-        ...common,
-        lineStyle: { width: 2, color: '#c9975c' },
-        itemStyle: { color: '#c9975c' },
-      }
-    ]
-  }, true)
-}
 
 // ── 存储管理（单机版 IndexedDB）──
 const storage = ref(null) // { usageMB, quotaMB, counts }
@@ -195,17 +113,8 @@ onMounted(async () => {
     pageSwitches.value.enableShopPage = stored.appSettings.enableShopPage ?? true
     pageSwitches.value.enableStopLoading = stored.appSettings.enableStopLoading ?? true
     pageSwitches.value.enableCleanUrl = stored.appSettings.enableCleanUrl ?? true
-    box1ChartType.value = stored.appSettings.box1ChartType ?? 'line'
   }
   loadStorage()
-  nextTick(renderPreviewChart)
-})
-
-watch(box1ChartType, () => nextTick(renderPreviewChart))
-
-onUnmounted(() => {
-  chartInstance?.dispose()
-  chartInstance = null
 })
 
 // ── 所有设置修改后自动保存（无防抖，立即落盘）──
@@ -218,7 +127,6 @@ async function autoSave() {
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
     enableShopPage: pageSwitches.value.enableShopPage,
-    box1ChartType: box1ChartType.value,
     enableStopLoading: pageSwitches.value.enableStopLoading,
     enableCleanUrl: pageSwitches.value.enableCleanUrl,
   }
@@ -229,7 +137,6 @@ async function autoSave() {
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
     enableShopPage: pageSwitches.value.enableShopPage,
-    box1ChartType: box1ChartType.value,
     enableStopLoading: pageSwitches.value.enableStopLoading,
     enableCleanUrl: pageSwitches.value.enableCleanUrl,
   })
@@ -285,14 +192,6 @@ async function autoSave() {
         <el-form-item label="供应商店铺页">
           <el-switch v-model="pageSwitches.enableShopPage" active-text="开启" inactive-text="关闭" @change="autoSave" />
           <div class="switch-desc">shop***.1688.com 供应商店铺首页 / 全部商品(offerlist)页</div>
-        </el-form-item>
-        <el-form-item label="box1 图表样式">
-          <el-radio-group v-model="box1ChartType" @change="autoSave">
-            <el-radio-button value="line">折线图</el-radio-button>
-            <el-radio-button value="bar">柱状图</el-radio-button>
-          </el-radio-group>
-          <div class="switch-desc">商品卡片 box1 显示"我最近 14 天浏览记录"的图表样式（X 轴日期、Y 轴次数），刷新 1688 页面后生效</div>
-          <div ref="chartPreviewEl" class="chart-preview"></div>
         </el-form-item>
         <el-form-item label="停止页面加载">
           <el-switch v-model="pageSwitches.enableStopLoading" active-text="开启" inactive-text="关闭" @change="autoSave" />
@@ -368,12 +267,4 @@ async function autoSave() {
 .storage-usage { font-size: 16px; font-weight: 700; color: #303133; }
 .storage-counts { font-size: 13px; color: #606266; }
 .import-btn { margin: 0 12px; }
-.chart-preview {
-  width: 100%;
-  height: 200px;
-  margin-top: 10px;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
-  background: #fff;
-}
 </style>
