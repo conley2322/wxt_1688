@@ -477,6 +477,40 @@ async function route(path, method, body, query) {
     })
   }
 
+  // ── 商品浏览时间轴 ──  // GET /api/v1/products/:id/view-timeline
+  const mViewTimeline = path.match(/^\/api\/v1\/products\/([^/]+)\/view-timeline$/)
+  if (mViewTimeline && method === 'GET') {
+    const offer_id = decodeURIComponent(mViewTimeline[1])
+    const [records, snap, multi, stored] = await Promise.all([
+      db.all('view_records'),
+      db.get('remote_snapshot', 'snapshot'),
+      getMultiSettings(),
+      browser.storage.local.get(['token', 'nickname']),
+    ])
+    const selfToken = stored.token || ''
+    const profile = await me()
+    const myName = stored.nickname || profile.nickname || '我'
+
+    // 自己的浏览：取本地记录
+    const items = records
+      .filter(r => r.offer_id === offer_id)
+      .map(r => ({ token: selfToken, nickname: myName, viewed_at: r.viewed_at, mine: true }))
+
+    // 他人浏览：远程快照中排除自己（避免与本地重复），受 showOthersViews 控制
+    if (multi.showOthersViews && snap) {
+      const nameOf = {}
+      for (const c of snap.clients || []) nameOf[c.token] = c.nickname
+      for (const r of snap.view_records || []) {
+        if (r.offer_id === offer_id && r.token !== selfToken) {
+          items.push({ token: r.token, nickname: nameOf[r.token] || '匿名', viewed_at: r.viewed_at, mine: false })
+        }
+      }
+    }
+
+    items.sort((a, b) => a.viewed_at - b.viewed_at) // 正序：旧在上、新在下
+    return ok(items)
+  }
+
   // ── 商品的他人笔记 ──  // GET /api/v1/products/:id/others
   const mProductOthers = path.match(/^\/api\/v1\/products\/([^/]+)\/others$/)
   if (mProductOthers && method === 'GET') {
@@ -693,6 +727,15 @@ function hasCommentContent(html) {
 
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
+  {
+    id: 'builtin-0.4.2', version: '0.4.2', title: '浏览时间轴与同步方式设置', status: 'published',
+    created_at: '2026-09-27T15:00:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>数据页新增「浏览时间轴」：谁在什么时候浏览了商品一目了然，旧在上、新在下，滚到底部自动刷新</li>'
+      + '<li>同步方式可设置：自动同步（间隔可选 1/3/5/10/15 分钟）或仅手动，修改立即生效</li>'
+      + '<li>修复团队成员笔记内容贴边的问题，已加左间距与编辑器对齐</li>'
+      + '</ul>',
+  },
   {
     id: 'builtin-0.4.1', version: '0.4.1', title: '修复跨电脑评论不显示', status: 'published',
     created_at: '2026-09-27T12:30:00.000Z', created_by: 'Conley',

@@ -5,7 +5,7 @@ import { useAppStore } from '@/stores/app.js'
 import { getProfile } from '@/utils/localdb.js'
 import {
   getRemoteConfig, connectAndRegister, updateNickname,
-  disconnect, saveRemoteConfig,
+  disconnect, saveRemoteConfig, SYNC_INTERVALS,
 } from '@/utils/remoteClient.js'
 
 const appStore = useAppStore()
@@ -117,6 +117,9 @@ const nicknameInput = ref('')
 const shareEnabled = ref(false)
 const multi = ref({ showOthersComments: true, showOthersViews: true, showOnListPage: true })
 const syncText = ref('尚未同步')
+const syncMode = ref('auto')
+const syncInterval = ref(5)
+const intervals = SYNC_INTERVALS
 
 async function refreshRemote() {
   const cfg = await getRemoteConfig()
@@ -125,6 +128,8 @@ async function refreshRemote() {
   nicknameInput.value = cfg.nickname
   shareEnabled.value = cfg.shareEnabled
   multi.value = cfg.multiSettings
+  syncMode.value = cfg.syncMode
+  syncInterval.value = cfg.syncInterval
   syncText.value = cfg.syncState.last_pull_at
     ? new Date(cfg.syncState.last_pull_at).toLocaleString('zh-CN', { hour12: false })
     : '尚未同步'
@@ -153,6 +158,20 @@ async function onChangeNickname() {
     ElMessage.error(e.message)
     refreshRemote()
   }
+}
+
+// 同步方式切换：自动 / 仅手动
+async function onSyncModeChange() {
+  await saveRemoteConfig({ syncMode: syncMode.value })
+  ElMessage.success(syncMode.value === 'manual' ? '已切换为仅手动同步' : '已开启自动同步')
+  // 切回自动时立即同步一次，避免干等一个间隔
+  if (syncMode.value === 'auto') onManualSync()
+}
+
+// 自动同步间隔变更
+async function onIntervalChange() {
+  await saveRemoteConfig({ syncInterval: syncInterval.value })
+  ElMessage.success(`同步间隔已设为 ${syncInterval.value} 分钟`)
 }
 
 // 共享同意开关
@@ -306,6 +325,18 @@ async function autoSave() {
         <el-form-item label="最近同步">
           <span style="color:#606266;font-size:13px">{{ syncText }}</span>
           <el-button size="small" style="margin-left:12px" :loading="syncing" @click="onManualSync">立即同步</el-button>
+        </el-form-item>
+        <el-form-item label="同步方式">
+          <el-radio-group v-model="syncMode" @change="onSyncModeChange">
+            <el-radio value="auto">自动同步</el-radio>
+            <el-radio value="manual">仅手动</el-radio>
+          </el-radio-group>
+          <div class="switch-desc">手动模式下不会自动联网，仅在点击「立即同步」时同步</div>
+        </el-form-item>
+        <el-form-item v-if="syncMode === 'auto'" label="同步间隔">
+          <el-select v-model="syncInterval" style="width:120px" @change="onIntervalChange">
+            <el-option v-for="m in intervals" :key="m" :label="`每 ${m} 分钟`" :value="m" />
+          </el-select>
         </el-form-item>
 
         <el-divider content-position="left">数据共享</el-divider>

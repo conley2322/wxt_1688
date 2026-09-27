@@ -6,6 +6,7 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import { useApiStore } from '@/stores/api/api.js'
 import { api } from '@/utils/dataClient.js'
+import ViewTimeline from '@/entrypoints/win/components/ViewTimeline.vue'
 
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -231,6 +232,20 @@ onBeforeUnmount(() => {
         <div ref="hourEl" class="chart-box"></div>
       </div>
 
+      <!-- 浏览时间轴：谁浏览了这个商品 -->
+      <div class="chart-block">
+        <div class="block-head">
+          <span class="block-title">浏览时间轴</span>
+          <span class="block-sub">滚到底部自动刷新</span>
+        </div>
+        <div class="timeline-box">
+          <ViewTimeline
+            :key="store.currentOfferId"
+            :target="store.currentOfferId"
+          />
+        </div>
+      </div>
+
       <!-- 时间信息 -->
       <div class="time-info">
         <div class="time-row">
@@ -288,6 +303,7 @@ onBeforeUnmount(() => {
 }
 .range-btn.active { color: #1677ff; border-color: #1677ff; background: #f0f7ff; }
 .chart-box { width: 100%; height: 170px; }
+.timeline-box { height: 190px; }
 
 /* 时间信息 */
 .time-info {

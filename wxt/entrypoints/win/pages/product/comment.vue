@@ -32,10 +32,11 @@ const store = useApiStore()
   height: 100%;
   min-height: 0;
 }
-/* 他人笔记区：占满剩余高度并可滚动 */
+/* 他人笔记区：占满剩余高度并可滚动，左右间距与上方编辑器对齐 */
 .others-wrap {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding: 0 12px 12px;
 }
 </style>

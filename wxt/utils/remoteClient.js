@@ -5,10 +5,13 @@
 //   nickname       昵称
 //   shareEnabled   是否同意共享我的数据
 //   multiSettings  { showOthersComments, showOthersViews, showOnListPage } 三个展示开关
+//   syncMode       'auto'=按间隔自动同步 | 'manual'=仅手动同步
+//   syncInterval   自动同步间隔（分钟）：1 / 3 / 5 / 10 / 15
 //   syncState      流水增量水位 + 最近同步时间
 import { db, getAllWithKeys } from './localdb.js'
 
 const DEFAULT_MULTI = { showOthersComments: true, showOthersViews: true, showOnListPage: true }
+export const SYNC_INTERVALS = [1, 3, 5, 10, 15]
 
 function normalizeAddress(addr) {
   return String(addr || '').trim().replace(/\/+$/, '')
@@ -16,7 +19,7 @@ function normalizeAddress(addr) {
 
 export async function getRemoteConfig() {
   const s = await browser.storage.local.get(
-    ['serverAddress', 'token', 'nickname', 'shareEnabled', 'multiSettings', 'syncState']
+    ['serverAddress', 'token', 'nickname', 'shareEnabled', 'multiSettings', 'syncMode', 'syncInterval', 'syncState']
   )
   return {
     serverAddress: normalizeAddress(s.serverAddress),
@@ -24,6 +27,8 @@ export async function getRemoteConfig() {
     nickname: s.nickname || '',
     shareEnabled: s.shareEnabled === true,
     multiSettings: { ...DEFAULT_MULTI, ...(s.multiSettings || {}) },
+    syncMode: s.syncMode === 'manual' ? 'manual' : 'auto',
+    syncInterval: SYNC_INTERVALS.includes(s.syncInterval) ? s.syncInterval : 5,
     syncState: s.syncState || { view_last_key: 0, appear_last_key: 0, last_push_at: 0, last_pull_at: 0 },
   }
 }
