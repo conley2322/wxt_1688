@@ -13,8 +13,6 @@ export const STORES = {
   appear_records: null, // 自增 { offer_id, appeared_at } — 列表页出现记录（组件渲染即 +1）
   suppliers: 'name',    // { name, address, memberId, created_at }
   comments: 'id',       // { id, kind:'product'|'supplier', target, text, created_at, updated_at }
-  tags: 'id',           // { id, text, font_color, bg_color, creator, created_at }
-  tag_assign: 'id',     // { id, tag_id, kind:'product'|'supplier', target, assigned_at }
   updates: 'id',        // { id, version, title, content, status, created_by, created_at, updated_at }
   operation_logs: null, // 自增 { action, detail, created_at }
 }

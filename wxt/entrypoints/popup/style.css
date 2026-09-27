@@ -8,11 +8,8 @@ body {
   font-family: Inter, system-ui, -apple-system, sans-serif;
   background: #fff;
   color: #333;
-  width: 360px;
-  min-height: 400px;
 }
 
 #app {
   width: 100%;
-  min-height: 400px;
 }

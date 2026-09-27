@@ -26,15 +26,6 @@ async function myComments(kind, target) {
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
 }
 
-async function myTagsFor(kind, target) {
-  const [assigns, tags] = await Promise.all([db.all('tag_assign'), db.all('tags')])
-  return assigns
-    .filter(a => a.kind === kind && a.target === target)
-    .map(a => tags.find(t => t.id === a.tag_id))
-    .filter(Boolean)
-    .map(t => ({ id: t.id, text: t.text, font_color: t.font_color, bg_color: t.bg_color }))
-}
-
 async function upsertProduct(offer_id, title, main_img_url, supplier_name) {
   let p = await db.get('products', offer_id)
   if (!p) {
@@ -122,8 +113,8 @@ async function route(path, method, body, query) {
     for (const offer_id of uniqueIds) {
       await db.add('appear_records', { offer_id, appeared_at: Date.now() })
     }
-    const [products, records, comments, assigns, appears] = await Promise.all([
-      db.all('products'), db.all('view_records'), db.all('comments'), db.all('tag_assign'), db.all('appear_records'),
+    const [products, records, comments, appears] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('comments'), db.all('appear_records'),
     ])
     // 有浏览记录的商品集合（box2 计数依据）
     const viewedOfferIds = new Set(records.map(r => r.offer_id))
@@ -145,7 +136,6 @@ async function route(path, method, body, query) {
       const views = records.filter(r => r.offer_id === offer_id)
       const apps = appears.filter(r => r.offer_id === offer_id)
       const cmts = comments.filter(c => c.kind === 'product' && c.target === offer_id)
-      const tags = assigns.filter(a => a.kind === 'product' && a.target === offer_id)
       // 最近 14 天按天聚合（box1 双折线图数据源：出现 + 浏览）
       const timeline = []
       const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -167,7 +157,6 @@ async function route(path, method, body, query) {
         appear_count: apps.length,
         view_count: views.length,
         comment_count: cmts.length,
-        tag_count: tags.length,
         i_have_viewed: views.length > 0,
         last_viewed_at: views.length ? Math.max(...views.map(v => v.viewed_at)) : null,
         my_views_timeline: timeline,
@@ -183,41 +172,29 @@ async function route(path, method, body, query) {
     const pageNum = parseInt(query.page) || 1
     const pageSize = parseInt(query.page_size) || 20
     let products = await db.all('products')
-    const [records, comments, assigns] = await Promise.all([db.all('view_records'), db.all('comments'), db.all('tag_assign')])
+    const [records, comments] = await Promise.all([db.all('view_records'), db.all('comments')])
     const lastView = {}
     for (const r of records) lastView[r.offer_id] = Math.max(lastView[r.offer_id] || 0, r.viewed_at)
     // 只显示我浏览过的商品（对齐原版语义）
     let list = products.filter(p => lastView[p.offer_id])
-    if (query.tag_id) {
-      list = list.filter(p => assigns.some(a => a.kind === 'product' && a.target === p.offer_id && a.tag_id === query.tag_id))
-    }
     let result = list.map(p => {
       const cmts = comments.filter(c => c.kind === 'product' && c.target === p.offer_id)
       return {
         ...p,
-        tags: assigns
-          .filter(a => a.kind === 'product' && a.target === p.offer_id)
-          .map(a => ({ tag_id: a.tag_id })),
         my_comment: (cmts[0] || {}).text || null,
         comment_count: cmts.length,
         view_count: (lastView[p.offer_id] ? records.filter(r => r.offer_id === p.offer_id).length : 0),
       }
     })
-    // 附加标签详情
-    const tags = await db.all('tags')
-    result = result.map(r => ({
-      ...r,
-      tags: r.tags.map(t => {
-        const tag = tags.find(x => x.id === t.tag_id)
-        return tag ? { id: tag.id, text: tag.text, font_color: tag.font_color, bg_color: tag.bg_color } : null
-      }).filter(Boolean),
-    }))
     if (query.search && query.search_type === 'title') {
       result = result.filter(p => p.title && p.title.includes(query.search))
     }
     if (query.search && query.search_type === 'comment') {
       result = result.filter(p => cmtsTextHas(p.offer_id, query.search, comments))
     }
+    // 按笔记状态筛选：commented=有笔记 / uncommented=仅浏览无笔记
+    if (query.comment_status === 'commented') result = result.filter(p => p.comment_count > 0)
+    else if (query.comment_status === 'uncommented') result = result.filter(p => p.comment_count === 0)
     if (query.sort_by === 'view_count') {
       result.sort((a, b) => query.sort_order === 'asc' ? a.view_count - b.view_count : b.view_count - a.view_count)
     } else if (query.sort_by === 'comment_count') {
@@ -225,8 +202,65 @@ async function route(path, method, body, query) {
     } else {
       result.sort((a, b) => (lastView[b.offer_id] || 0) - (lastView[a.offer_id] || 0))
     }
+    // 概览统计（不受筛选影响，供页面顶部统计卡片使用）
+    const statsOverview = {
+      total: list.length,
+      commented: list.filter(p => comments.some(c => c.kind === 'product' && c.target === p.offer_id)).length,
+      total_views: records.length,
+    }
+    statsOverview.uncommented = statsOverview.total - statsOverview.commented
     const total = result.length
-    return ok(result.slice((pageNum - 1) * pageSize, pageNum * pageSize), { total })
+    return ok(result.slice((pageNum - 1) * pageSize, pageNum * pageSize), { total, stats: statsOverview })
+  }
+
+  // ── 商品数据统计 ──  // GET /api/v1/products/:id/stats
+  const mProductStats = path.match(/^\/api\/v1\/products\/([^/]+)\/stats$/)
+  if (mProductStats && method === 'GET') {
+    const offer_id = decodeURIComponent(mProductStats[1])
+    const [products, records, comments, appears] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('comments'), db.all('appear_records'),
+    ])
+    const views = records.filter(r => r.offer_id === offer_id)
+    const apps = appears.filter(r => r.offer_id === offer_id)
+    const cmts = comments.filter(c => c.kind === 'product' && c.target === offer_id)
+
+    // 近 30 天每日聚合（出现 + 浏览）
+    const daily = []
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    for (let i = 29; i >= 0; i--) {
+      const dayStart = today.getTime() - i * DAY
+      const d = new Date(dayStart)
+      daily.push({
+        date: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        view: views.filter(v => v.viewed_at >= dayStart && v.viewed_at < dayStart + DAY).length,
+        appear: apps.filter(v => v.appeared_at >= dayStart && v.appeared_at < dayStart + DAY).length,
+      })
+    }
+
+    // 24 小时浏览时段分布
+    const hourly = new Array(24).fill(0)
+    for (const v of views) hourly[new Date(v.viewed_at).getHours()]++
+
+    const product = products.find(p => p.offer_id === offer_id)
+    const supplierName = product?.supplier_name || ''
+    const viewedOfferIds = new Set(records.map(r => r.offer_id))
+    const supplierViewedCount = supplierName
+      ? new Set(products.filter(p => p.supplier_name === supplierName && viewedOfferIds.has(p.offer_id)).map(p => p.offer_id)).size
+      : 0
+
+    return ok({
+      totals: {
+        view_count: views.length,
+        appear_count: apps.length,
+        comment_count: cmts.length,
+      },
+      first_viewed_at: views.length ? Math.min(...views.map(v => v.viewed_at)) : null,
+      last_viewed_at: views.length ? Math.max(...views.map(v => v.viewed_at)) : null,
+      supplier_name: supplierName,
+      supplier_viewed_count: supplierViewedCount,
+      daily,
+      hourly,
+    })
   }
 
   // ── 商品评论 ──
@@ -253,56 +287,26 @@ async function route(path, method, body, query) {
     return ok(null)
   }
 
-  // ── 商品标签 ──
-  const mProductTags = path.match(/^\/api\/v1\/products\/([^/]+)\/tags$/)
-  if (mProductTags && method === 'GET') {
-    const mine = await myTagsFor('product', decodeURIComponent(mProductTags[1]))
-    return ok({ mine, others: [] })
-  }
-  if (mProductTags && method === 'POST') {
-    const target = decodeURIComponent(mProductTags[1])
-    await db.put('tag_assign', { id: uid(), tag_id: body.tag_id, kind: 'product', target, assigned_at: Date.now() })
-    return ok(null)
-  }
-  const mProductTagDel = path.match(/^\/api\/v1\/products\/([^/]+)\/tags\/([^/]+)$/)
-  if (mProductTagDel && method === 'DELETE') {
-    const target = decodeURIComponent(mProductTagDel[1])
-    const assigns = await db.all('tag_assign')
-    for (const a of assigns.filter(a => a.kind === 'product' && a.target === target && a.tag_id === mProductTagDel[2])) {
-      await db.delete('tag_assign', a.id)
+  // 商品评论自动保存：有则更新、无则创建、清空则删除  // PUT /api/v1/products/:id/comments/auto
+  const mProductCommentAuto = path.match(/^\/api\/v1\/products\/([^/]+)\/comments\/auto$/)
+  if (mProductCommentAuto && method === 'PUT') {
+    const target = decodeURIComponent(mProductCommentAuto[1])
+    const existing = (await db.all('comments')).find(x => x.kind === 'product' && x.target === target)
+    const blank = !hasCommentContent(body.text)
+    if (blank && existing) { await db.delete('comments', existing.id); return ok(null) }
+    if (blank) return ok(null)
+    if (existing) {
+      existing.text = body.text
+      existing.updated_at = new Date().toISOString()
+      await db.put('comments', existing)
+      return ok(existing)
     }
-    return ok(null)
+    const c = { id: uid(), kind: 'product', target, text: body.text, created_at: new Date().toISOString(), updated_at: null }
+    await db.put('comments', c)
+    return ok(c)
   }
 
-  // ── 标签池 ──
-  if (path === '/api/v1/tags/pool' && method === 'GET') {
-    const list = await db.all('tags')
-    return ok(list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)))
-  }
-  if (path === '/api/v1/tags' && method === 'POST') {
-    const p = await me()
-    const t = {
-      id: uid(), text: body.text,
-      font_color: body.font_color || '#fff', bg_color: body.bg_color || '#1677ff',
-      creator: p.nickname, created_at: new Date().toISOString(),
-    }
-    await db.put('tags', t)
-    await log('POST /api/v1/tags', `创建了标签「${t.text}」`)
-    return ok(t)
-  }
-  const mTag = path.match(/^\/api\/v1\/tags\/([^/]+)$/)
-  if (mTag && method === 'PUT') {
-    const t = await db.get('tags', mTag[1])
-    if (t) { Object.assign(t, body); await db.put('tags', t) }
-    return ok(t)
-  }
-  if (mTag && method === 'DELETE') {
-    const assigns = await db.all('tag_assign')
-    for (const a of assigns.filter(a => a.tag_id === mTag[1])) await db.delete('tag_assign', a.id)
-    await db.delete('tags', mTag[1])
-    await log('DELETE ' + path, '删除了标签')
-    return ok(null)
-  }
+  // ── 商品标签接口已移除（标签功能下线）──
 
   // ── 供应商 ──
   if (path === '/api/v1/suppliers/my-suppliers' && method === 'GET') {
@@ -328,6 +332,7 @@ async function route(path, method, body, query) {
       commented: list.filter(s => s.comment_count > 0).length,
       totalProducts: list.reduce((sum, s) => sum + s.product_count, 0),
     }
+    stats.viewed = stats.total - stats.commented
     if (query.filter === 'commented') list = list.filter(s => s.comment_count > 0)
     else if (query.filter === 'viewed') list = list.filter(s => s.comment_count === 0)
     if (query.search) list = list.filter(s => s.supplier_name.toLowerCase().includes(query.search.toLowerCase()))
@@ -362,28 +367,37 @@ async function route(path, method, body, query) {
     return ok(null)
   }
 
-  const mSupTags = path === '/api/v1/suppliers/tags'
-  if (mSupTags && method === 'GET') {
-    const mine = await myTagsFor('supplier', query.supplier_name || '')
-    return ok({ mine, others: [] })
-  }
-  if (mSupTags && method === 'POST') {
-    await db.put('tag_assign', { id: uid(), tag_id: body.tag_id, kind: 'supplier', target: body.supplier_name, assigned_at: Date.now() })
-    return ok(null)
-  }
-  const mSupTagDel = path.match(/^\/api\/v1\/suppliers\/tags\/([^/]+)$/)
-  if (mSupTagDel && method === 'DELETE') {
-    const assigns = await db.all('tag_assign')
-    for (const a of assigns.filter(a => a.kind === 'supplier' && a.target === query.supplier_name && a.tag_id === mSupTagDel[1])) {
-      await db.delete('tag_assign', a.id)
+  // 供应商评论自动保存：有则更新、无则创建、清空则删除  // PUT /api/v1/suppliers/comments/auto?supplier_name=xx
+  const mSupCommentAuto = path === '/api/v1/suppliers/comments/auto'
+  if (mSupCommentAuto && method === 'PUT') {
+    const target = query.supplier_name || ''
+    const existing = (await db.all('comments')).find(x => x.kind === 'supplier' && x.target === target)
+    const blank = !hasCommentContent(body.text)
+    if (blank && existing) { await db.delete('comments', existing.id); return ok(null) }
+    if (blank) return ok(null)
+    if (existing) {
+      existing.text = body.text
+      existing.updated_at = new Date().toISOString()
+      await db.put('comments', existing)
+      return ok(existing)
     }
-    return ok(null)
+    const c = { id: uid(), kind: 'supplier', target, text: body.text, created_at: new Date().toISOString(), updated_at: null }
+    await db.put('comments', c)
+    if (target && !(await db.get('suppliers', target))) {
+      await db.put('suppliers', { name: target, address: '', memberId: '', created_at: Date.now() })
+    }
+    return ok(c)
   }
+
+  // ── 供应商标签接口已移除（标签功能下线）──
 
   // ── 更新日志 ──
   if (path === '/api/v1/updates' && method === 'GET') {
     const list = await db.all('updates')
-    return ok(list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)))
+    // 合并内置公告：用户已发布同版本号时内置版不重复展示
+    const userVersions = new Set(list.map(u => u.version))
+    const builtin = BUILTIN_UPDATES.filter(u => !userVersions.has(u.version))
+    return ok([...list, ...builtin].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)))
   }
   if (path === '/api/v1/updates' && method === 'POST') {
     const p = await me()
@@ -431,6 +445,45 @@ function lastViewOf(offer_id, records) {
 function cmtsTextHas(offer_id, search, comments) {
   return comments.some(c => c.kind === 'product' && c.target === offer_id && c.text && c.text.includes(search))
 }
+
+// 评论内容是否为空（纯文本为空且不含图片）
+function hasCommentContent(html) {
+  if (!html) return false
+  const text = String(html).replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim()
+  return !!text || /<img[^>]+src=/.test(html)
+}
+
+// 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
+const BUILTIN_UPDATES = [
+  {
+    id: 'builtin-0.2.2', version: '0.2.2', title: '链接净化 · 自动保存笔记 · 数据统计页', status: 'published',
+    created_at: '2026-09-27T00:00:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>新增「净化详情页链接」：进入商品详情页自动去除链接后缀参数，页面右侧出现悬浮按钮，一键复制干净链接（可在设置中开关）</li>'
+      + '<li>商品/供应商评论改为「自动保存笔记」：打开即编辑，停顿自动保存，再次进入自动恢复，清空内容即自动删除</li>'
+      + '<li>新增「数据」页：出现/浏览趋势折线图（支持 7/14/30 天切换）、24 小时浏览时段分布、同店已看商品等统计</li>'
+      + '<li>优化商品管理、供应商管理布局：顶部统计卡片可直接点击筛选，已看/有笔记状态一目了然</li>'
+      + '<li>整体下线标签功能；精简评论工具栏为加粗、斜体、插入图片、全屏</li>'
+      + '</ul>',
+  },
+  {
+    id: 'builtin-0.2.1', version: '0.2.1', title: '弹窗显示优化', status: 'published',
+    created_at: '2026-09-16T00:00:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>修复工具栏弹窗尺寸写死导致大片空白的问题，窗口随内容自适应</li>'
+      + '<li>优化弹窗在 1688 各页面下的显示效果</li>'
+      + '</ul>',
+  },
+  {
+    id: 'builtin-0.2.0', version: '0.2.0', title: '单机版发布', status: 'published',
+    created_at: '2026-09-10T00:00:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>单机版发布：全部数据保存在浏览器本地（IndexedDB），无需登录、无需服务器</li>'
+      + '<li>支持商品评论、供应商评论、商品浏览与列表出现记录</li>'
+      + '<li>支持数据导出备份与导入迁移</li>'
+      + '</ul>',
+  },
+]
 
 /**
  * 统一入口：解析 path 上的 query，分发给路由

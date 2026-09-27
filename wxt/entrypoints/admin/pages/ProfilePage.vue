@@ -8,6 +8,7 @@ const saving = ref(false)
 const user = reactive({
   id: null,
   username: '',
+  nickname: '',
   email: '',
   avatar_color: null,
   role: '',
@@ -22,7 +23,7 @@ const customColor = ref('')
 const pwForm = reactive({ current: '', newPw: '', confirm: '' })
 
 // 头像首字母
-const avatarInitial = computed(() => (user.username || '?').charAt(0).toUpperCase())
+const avatarInitial = computed(() => (user.nickname || user.username || '?').charAt(0).toUpperCase())
 
 // 当前显示颜色：用户自选 > 哈希降级
 const displayColor = computed(() => {
@@ -93,7 +94,7 @@ function onNativeColorPick(e) {
 async function saveProfile() {
   saving.value = true
   try {
-    const res = await api('/api/v1/users/profile', 'PUT', { email: user.email || '' })
+    const res = await api('/api/v1/users/profile', 'PUT', { username: user.nickname, email: user.email || '' })
     if (res.code === 200) {
       ElMessage.success('保存成功')
       Object.assign(user, res.data)
@@ -144,7 +145,7 @@ async function changePassword() {
           {{ avatarInitial }}
         </div>
         <div class="hero-info">
-          <div class="hero-name">{{ user.username }}</div>
+          <div class="hero-name">{{ user.nickname || user.username }}</div>
           <div class="hero-meta">
             <el-tag :type="user.role === 'admin' ? 'warning' : 'info'" size="small">
               {{ user.role === 'admin' ? '管理员' : '普通用户' }}
@@ -209,6 +210,9 @@ async function changePassword() {
             </div>
           </template>
           <el-form label-width="72px" size="default" class="profile-form">
+            <el-form-item label="昵称">
+              <el-input v-model="user.nickname" placeholder="请输入昵称" maxlength="12" />
+            </el-form-item>
             <el-form-item label="邮箱">
               <el-input v-model="user.email" placeholder="请输入邮箱地址" />
             </el-form-item>

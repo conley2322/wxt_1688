@@ -137,7 +137,7 @@ const viewerAvatars = computed(() =>
     <!-- 主 Tab 栏 -->
     <div class="main-tabs">
       <span
-        v-for="tab in [{ key: 'product', label: '商品' }, { key: 'supplier', label: '供应商' }]"
+        v-for="tab in [{ key: 'product', label: '商品' }, { key: 'supplier', label: '供应商' }, { key: 'analysis', label: '数据' }]"
         :key="tab.key" class="main-tab" :class="{ active: currentTab === tab.key }" @click="goToTab(tab.key)">
         {{ tab.label }}
       </span>

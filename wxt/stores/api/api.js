@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { api as dataApi } from '../../utils/dataClient.js'
 
 export const useApiStore = defineStore('api', () => {
@@ -14,31 +14,6 @@ export const useApiStore = defineStore('api', () => {
   // ══════════════════════════════════════
   const currentOfferId = ref('')
   const currentSupplierName = ref('')
-
-  // ══════════════════════════════════════
-  // 全局标签池
-  // ══════════════════════════════════════
-  const tagPool = ref([])
-
-  // ══════════════════════════════════════
-  // 商品标签（当前查看的商品）
-  // ══════════════════════════════════════
-  const productTagsMine = ref([])
-  const productTagsOthers = ref([])
-  const productAssignedTags = computed(() => [...productTagsMine.value, ...productTagsOthers.value])
-  const productAvailableTags = computed(() =>
-    tagPool.value.filter(t => !productAssignedTags.value.some(at => at.id === t.id))
-  )
-
-  // ══════════════════════════════════════
-  // 供应商标签（当前查看的供应商）
-  // ══════════════════════════════════════
-  const supplierTagsMine = ref([])
-  const supplierTagsOthers = ref([])
-  const supplierAssignedTags = computed(() => [...supplierTagsMine.value, ...supplierTagsOthers.value])
-  const supplierAvailableTags = computed(() =>
-    tagPool.value.filter(t => !supplierAssignedTags.value.some(at => at.id === t.id))
-  )
 
   // ══════════════════════════════════════
   // 商品评论
@@ -102,35 +77,6 @@ export const useApiStore = defineStore('api', () => {
   }
 
   // ══════════════════════════════════════
-  // 标签操作
-  // ══════════════════════════════════════
-  async function deleteTag(tag_id) {
-    await ajax(`/api/v1/tags/${tag_id}`, 'DELETE')
-    await fetchTagPool()
-  }
-
-  // ══════════════════════════════════════
-  // 标签池
-  // ══════════════════════════════════════
-  async function fetchTagPool() {
-    const res = await ajax('/api/v1/tags/pool', 'GET')
-    tagPool.value = res.data
-    return res.data
-  }
-
-  async function createTag(text, font_color, bg_color, visibility) {
-    const res = await ajax('/api/v1/tags', 'POST', {
-      text,
-      font_color: font_color || '#fff',
-      bg_color: bg_color || '#1677ff',
-      visibility: visibility || 'public'
-    })
-    // 刷新标签池
-    await fetchTagPool()
-    return res.data
-  }
-
-  // ══════════════════════════════════════
   // 商品评论
   // ══════════════════════════════════════
   async function fetchProductComments(offer_id) {
@@ -147,28 +93,6 @@ export const useApiStore = defineStore('api', () => {
 
   async function deleteProductComment(comment_id) {
     const res = await ajax(`/api/v1/products/comments/${comment_id}`, 'DELETE')
-    return res
-  }
-
-  // ══════════════════════════════════════
-  // 商品标签
-  // ══════════════════════════════════════
-  async function fetchProductTags(offer_id) {
-    const res = await ajax(`/api/v1/products/${offer_id}/tags`, 'GET')
-    productTagsMine.value = res.data.mine
-    productTagsOthers.value = res.data.others
-    return res.data
-  }
-
-  async function assignProductTag(offer_id, tag_id) {
-    const res = await ajax(`/api/v1/products/${offer_id}/tags`, 'POST', { tag_id })
-    await fetchProductTags(offer_id)
-    return res
-  }
-
-  async function removeProductTag(offer_id, tag_id) {
-    const res = await ajax(`/api/v1/products/${offer_id}/tags/${tag_id}`, 'DELETE')
-    await fetchProductTags(offer_id)
     return res
   }
 
@@ -215,28 +139,6 @@ export const useApiStore = defineStore('api', () => {
   }
 
   // ══════════════════════════════════════
-  // 供应商标签
-  // ══════════════════════════════════════
-  async function fetchSupplierTags(supplier_name) {
-    const res = await ajax(`/api/v1/suppliers/tags?supplier_name=${encodeURIComponent(supplier_name)}`, 'GET')
-    supplierTagsMine.value = res.data.mine
-    supplierTagsOthers.value = res.data.others
-    return res.data
-  }
-
-  async function assignSupplierTag(supplier_name, tag_id) {
-    const res = await ajax('/api/v1/suppliers/tags', 'POST', { supplier_name, tag_id })
-    await fetchSupplierTags(supplier_name)
-    return res
-  }
-
-  async function removeSupplierTag(supplier_name, tag_id) {
-    const res = await ajax(`/api/v1/suppliers/tags/${tag_id}?supplier_name=${encodeURIComponent(supplier_name)}`, 'DELETE')
-    await fetchSupplierTags(supplier_name)
-    return res
-  }
-
-  // ══════════════════════════════════════
   // Box 批量查询
   // ══════════════════════════════════════
   async function fetchBatchInfo(offer_ids) {
@@ -249,15 +151,6 @@ export const useApiStore = defineStore('api', () => {
     currentUser,
     currentOfferId,
     currentSupplierName,
-    tagPool,
-    productTagsMine,
-    productTagsOthers,
-    productAssignedTags,
-    productAvailableTags,
-    supplierTagsMine,
-    supplierTagsOthers,
-    supplierAssignedTags,
-    supplierAvailableTags,
     productComments,
     supplierComments,
 
@@ -270,34 +163,17 @@ export const useApiStore = defineStore('api', () => {
     insertProduct,
     createSupplier,
 
-    // 标签操作
-    deleteTag,
-
-    // 标签池
-    fetchTagPool,
-    createTag,
-
     // 商品评论
     fetchProductComments,
     addProductComment,
     updateProductComment,
     deleteProductComment,
 
-    // 商品标签
-    fetchProductTags,
-    assignProductTag,
-    removeProductTag,
-
     // 供应商评论
     fetchSupplierComments,
     addSupplierComment,
     updateSupplierComment,
     deleteSupplierComment,
-
-    // 供应商标签
-    fetchSupplierTags,
-    assignSupplierTag,
-    removeSupplierTag,
 
     // Box 批量
     fetchBatchInfo,

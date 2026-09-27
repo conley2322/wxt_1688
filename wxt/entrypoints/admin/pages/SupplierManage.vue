@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, onMounted } from 'vue'
-import { Shop, Search } from '@element-plus/icons-vue'
+import { Search } from '@element-plus/icons-vue'
 import { api } from '../utils/useApi.js'
 import SupplierCard from '../components/SupplierCard.vue'
 
@@ -8,7 +8,7 @@ const suppliers = ref([])
 const loading = ref(false)
 const searchText = ref('')
 
-// 筛选类型：all / commented / viewed
+// 筛选类型：all / commented / viewed（点击顶部统计卡片切换）
 const filterType = ref('all')
 
 // 分页
@@ -17,7 +17,7 @@ const pageSize = ref(10)
 const total = ref(0)
 
 // 页头统计（由后端返回，不受筛选/搜索影响）
-const stats = ref({ total: 0, commented: 0, totalProducts: 0 })
+const stats = ref({ total: 0, commented: 0, viewed: 0, totalProducts: 0 })
 
 onMounted(loadSuppliers)
 
@@ -42,6 +42,11 @@ async function loadSuppliers() {
   } finally {
     loading.value = false
   }
+}
+
+// 点击统计卡片快捷筛选
+function onFilter(type) {
+  filterType.value = type
 }
 
 // 搜索防抖：输入停顿 300ms 后自动查询
@@ -74,35 +79,45 @@ function handleSizeChange(size) {
 
 <template>
   <section class="supplier-page">
-    <!-- 标题栏 -->
-    <div class="page-header">
-      <h2 class="page-title">
-        <el-icon :size="20"><Shop /></el-icon>
-        供应商管理
-      </h2>
-      <div class="page-stats">
-        <span>{{ stats.total }} 个供应商</span>
-        <span class="stat-sep">·</span>
-        <span>{{ stats.commented }} 个有评论</span>
-        <span class="stat-sep">·</span>
-        <span>{{ stats.totalProducts }} 件商品</span>
+    <h2 class="page-title">供应商管理</h2>
+
+    <!-- 概览统计卡片（点击即可筛选） -->
+    <div class="overview-cards">
+      <div
+        class="ov-card" :class="{ active: filterType === 'all' }"
+        @click="onFilter('all')"
+      >
+        <div class="ov-num blue">{{ stats.total }}</div>
+        <div class="ov-label">全部供应商</div>
+      </div>
+      <div
+        class="ov-card" :class="{ active: filterType === 'commented' }"
+        @click="onFilter('commented')"
+      >
+        <div class="ov-num orange">{{ stats.commented }}</div>
+        <div class="ov-label">有留言</div>
+      </div>
+      <div
+        class="ov-card" :class="{ active: filterType === 'viewed' }"
+        @click="onFilter('viewed')"
+      >
+        <div class="ov-num gray">{{ stats.viewed }}</div>
+        <div class="ov-label">仅浏览</div>
+      </div>
+      <div class="ov-card static">
+        <div class="ov-num green">{{ stats.totalProducts }}</div>
+        <div class="ov-label">关联商品总数</div>
       </div>
     </div>
 
-    <!-- 筛选 + 搜索栏 -->
+    <!-- 搜索栏 -->
     <div class="filter-bar">
-      <el-radio-group v-model="filterType" size="small">
-        <el-radio-button value="all">全部</el-radio-button>
-        <el-radio-button value="commented">有评论</el-radio-button>
-        <el-radio-button value="viewed">仅浏览</el-radio-button>
-      </el-radio-group>
-
       <el-input
         v-model="searchText"
         placeholder="搜索供应商名称"
-        size="small"
+        size="default"
         clearable
-        style="width:220px"
+        style="width:280px"
         :prefix-icon="Search"
       />
     </div>
@@ -141,36 +156,43 @@ function handleSizeChange(size) {
   padding-bottom: 48px;
 }
 
-.page-header {
-  margin-bottom: 20px;
-}
-
 .page-title {
   font-size: 20px;
-  font-weight: 700;
-  color: #1e293b;
-  margin: 0 0 6px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  font-weight: 600;
+  color: #303133;
+  margin: 0 0 16px;
 }
 
-.page-stats {
-  font-size: 13px;
-  color: #94a3b8;
+/* 概览统计卡片 */
+.overview-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
 }
-
-.stat-sep {
-  margin: 0 6px;
+.ov-card {
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: all .2s;
 }
+.ov-card:hover { border-color: #c9975c; }
+.ov-card.active { border-color: #c9975c; background: #fdf8f3; }
+.ov-card.static { cursor: default; }
+.ov-card.static:hover { border-color: #ebeef5; }
+.ov-num { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.ov-num.blue { color: #1677ff; }
+.ov-num.orange { color: #ff6a00; }
+.ov-num.gray { color: #909399; }
+.ov-num.green { color: #52c41a; }
+.ov-label { font-size: 12px; color: #999; margin-top: 4px; }
 
 .filter-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 18px;
-  flex-wrap: wrap;
-  gap: 12px;
+  margin-bottom: 16px;
 }
 
 .pagination {

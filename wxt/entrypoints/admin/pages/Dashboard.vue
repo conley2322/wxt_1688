@@ -7,20 +7,17 @@ import { Clock } from '@element-plus/icons-vue'
 const router = useRouter()
 
 const userCount = ref(0)
-const tagCount = ref(0)
 const productCount = ref(0)
 const logs = ref([])
 const loadingLogs = ref(false)
 
 onMounted(async () => {
   try {
-    const [u, t, p] = await Promise.all([
+    const [u, p] = await Promise.all([
       api('/api/v1/users', 'GET'),
-      api('/api/v1/tags/pool', 'GET'),
       api('/api/v1/products/mine', 'GET'),
     ])
     if (u.code === 200) userCount.value = (u.data || u).length
-    if (t.code === 200) tagCount.value = t.data.length
     if (p.code === 200) productCount.value = p.total || p.data.length
   } catch (e) { console.error('[Dashboard] 加载统计失败:', e) }
 
@@ -50,10 +47,9 @@ function formatTime(iso) {
 
     <!-- 统计卡片 -->
     <el-row :gutter="16" style="margin-bottom:24px">
-      <el-col :span="6"><el-card shadow="hover"><el-statistic title="用户总数" :value="userCount"><template #prefix><el-icon color="#c9975c"><User /></el-icon></template></el-statistic></el-card></el-col>
-      <el-col :span="6"><el-card shadow="hover"><el-statistic title="标签总数" :value="tagCount"><template #prefix><el-icon color="#67c23a"><CollectionTag /></el-icon></template></el-statistic></el-card></el-col>
-      <el-col :span="6"><el-card shadow="hover"><el-statistic title="浏览商品" :value="productCount"><template #prefix><el-icon color="#409eff"><Goods /></el-icon></template></el-statistic></el-card></el-col>
-      <el-col :span="6"><el-card shadow="hover"><el-statistic title="系统状态" value="运行中"><template #prefix><el-icon color="#67c23a"><CircleCheck /></el-icon></template></el-statistic></el-card></el-col>
+      <el-col :span="8"><el-card shadow="hover"><el-statistic title="用户总数" :value="userCount"><template #prefix><el-icon color="#c9975c"><User /></el-icon></template></el-statistic></el-card></el-col>
+      <el-col :span="8"><el-card shadow="hover"><el-statistic title="浏览商品" :value="productCount"><template #prefix><el-icon color="#409eff"><Goods /></el-icon></template></el-statistic></el-card></el-col>
+      <el-col :span="8"><el-card shadow="hover"><el-statistic title="系统状态" value="运行中"><template #prefix><el-icon color="#67c23a"><CircleCheck /></el-icon></template></el-statistic></el-card></el-col>
     </el-row>
 
     <!-- 操作日志 -->

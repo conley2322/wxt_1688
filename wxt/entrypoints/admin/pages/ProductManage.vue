@@ -1,7 +1,7 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { api } from '../utils/useApi.js'
-import { List, Grid, ArrowDown } from '@element-plus/icons-vue'
+import { List, Grid } from '@element-plus/icons-vue'
 import ProductMasonryCard from '../components/ProductMasonryCard.vue'
 
 const products = ref([])
@@ -10,22 +10,20 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const drawerVisible = ref(false)
 const currentProduct = ref(null)
-const productTags = ref({ mine: [], others: [] })
 const productComments = ref([])
 const loadingDetail = ref(false)
 
 // 搜索和排序
 const searchText = ref('')
 const searchType = ref('title')
-const selectedTagId = ref('')
-const allMyTags = ref([])
 const sortBy = ref('')
 const sortOrder = ref('desc')
 
-onMounted(async () => {
-  console.log('[ProductManage] 挂载')
-  await Promise.all([loadProducts(), loadMyTags()])
-})
+// 笔记状态筛选：''=全部 / commented=有笔记 / uncommented=仅浏览
+const commentStatus = ref('')
+const statsOverview = ref({ total: 0, commented: 0, uncommented: 0, total_views: 0 })
+
+onMounted(loadProducts)
 
 async function loadProducts() {
   try {
@@ -34,38 +32,30 @@ async function loadProducts() {
       page_size: pageSize.value
     })
     if (searchText.value) { params.set('search', searchText.value); params.set('search_type', searchType.value) }
-    if (selectedTagId.value) params.set('tag_id', selectedTagId.value)
     if (sortBy.value) { params.set('sort_by', sortBy.value); params.set('sort_order', sortOrder.value) }
+    if (commentStatus.value) params.set('comment_status', commentStatus.value)
 
     const res = await api(`/api/v1/products/mine?${params}`, 'GET')
-    console.log('[ProductManage] 商品列表:', res)
-    if (res.code === 200) { 
-      products.value = res.data; 
-      total.value = res.total || res.data.length 
+    if (res.code === 200) {
+      products.value = res.data
+      total.value = res.total || res.data.length
+      if (res.stats) statsOverview.value = res.stats
     }
   } catch (e) { console.error('[ProductManage] 加载失败:', e) }
 }
 
-async function loadMyTags() {
-  try {
-    const res = await api('/api/v1/tags/pool', 'GET')
-    if (res.code === 200) allMyTags.value = res.data
-  } catch { }
+function onSearch() {
+  currentPage.value = 1
+  loadProducts()
 }
 
 function productUrl(offerId) {
   return `https://detail.1688.com/offer/${offerId}.html`
 }
 
-function onSearch() {
-  selectedTagId.value = ''
-  currentPage.value = 1
-  loadProducts()
-}
-
-function onTagSelect(tagId) {
-  searchText.value = ''
-  selectedTagId.value = tagId
+// 点击统计卡片快捷筛选
+function onStatusFilter(status) {
+  commentStatus.value = commentStatus.value === status ? '' : status
   currentPage.value = 1
   loadProducts()
 }
@@ -83,8 +73,8 @@ function onSort(by) {
 
 function clearFilter() {
   searchText.value = ''
-  selectedTagId.value = ''
   sortBy.value = ''
+  commentStatus.value = ''
   currentPage.value = 1
   loadProducts()
 }
@@ -105,20 +95,20 @@ async function openDrawer(row) {
   drawerVisible.value = true
   loadingDetail.value = true
   try {
-    const [tagsRes, commentsRes] = await Promise.all([
-      api(`/api/v1/products/${row.offer_id}/tags`, 'GET'),
-      api(`/api/v1/products/${row.offer_id}/comments`, 'GET'),
-    ])
-    if (tagsRes.code === 200) productTags.value = tagsRes.data
+    const commentsRes = await api(`/api/v1/products/${row.offer_id}/comments`, 'GET')
     if (commentsRes.code === 200) productComments.value = commentsRes.data
   } catch (e) { console.error(e) }
   loadingDetail.value = false
 }
 
-const selectedTagLabel = computed(() => {
-  const t = allMyTags.value.find(t => t.id === selectedTagId.value)
-  return t ? t.text : ''
-})
+// 时间格式化（ISO → MM-DD HH:mm）
+function fmtTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d)) return iso
+  const p = (n) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
 
 // 视图模式：table 表格 / masonry 瀑布流
 const viewMode = ref('table')
@@ -127,36 +117,49 @@ const viewMode = ref('table')
   <section>
     <h2 class="page-title">商品管理 <span class="page-count">({{ total }})</span></h2>
 
+    <!-- 概览统计卡片（点击即可筛选） -->
+    <div class="overview-cards">
+      <div
+        class="ov-card" :class="{ active: commentStatus === '' }"
+        @click="onStatusFilter('')"
+      >
+        <div class="ov-num blue">{{ statsOverview.total }}</div>
+        <div class="ov-label">全部商品</div>
+      </div>
+      <div
+        class="ov-card" :class="{ active: commentStatus === 'commented' }"
+        @click="onStatusFilter('commented')"
+      >
+        <div class="ov-num orange">{{ statsOverview.commented }}</div>
+        <div class="ov-label">有笔记</div>
+      </div>
+      <div
+        class="ov-card" :class="{ active: commentStatus === 'uncommented' }"
+        @click="onStatusFilter('uncommented')"
+      >
+        <div class="ov-num gray">{{ statsOverview.uncommented }}</div>
+        <div class="ov-label">仅浏览</div>
+      </div>
+      <div class="ov-card static">
+        <div class="ov-num green">{{ statsOverview.total_views }}</div>
+        <div class="ov-label">累计浏览次数</div>
+      </div>
+    </div>
+
     <!-- 搜索栏 -->
     <div class="search-bar">
-      <el-input v-model="searchText" placeholder="搜索标题或评论..." style="width:260px" clearable @clear="onSearch"
+      <el-input v-model="searchText" placeholder="搜索标题或笔记..." style="width:260px" clearable @clear="onSearch"
         @keyup.enter="onSearch">
         <template #prepend>
           <el-select v-model="searchType" style="width:80px">
             <el-option label="标题" value="title" />
-            <el-option label="评论" value="comment" />
+            <el-option label="笔记" value="comment" />
           </el-select>
         </template>
       </el-input>
       <el-button type="primary" @click="onSearch" style="margin-left:8px">搜索</el-button>
 
-      <!-- 标签下拉筛选 -->
-      <el-dropdown v-if="allMyTags.length" style="margin-left:12px" @command="onTagSelect">
-        <el-button :type="selectedTagId ? 'warning' : ''">
-          {{ selectedTagLabel || '按标签筛选' }}<el-icon class="el-icon--right">
-            <ArrowDown />
-          </el-icon>
-        </el-button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item v-for="tag in allMyTags" :key="tag.id" :command="tag.id">
-              <el-tag :color="tag.bg_color" :style="{ color: tag.font_color }" size="small">{{ tag.text }}</el-tag>
-            </el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-
-      <el-button v-if="searchText || selectedTagId" style="margin-left:8px" @click="clearFilter">清除筛选</el-button>
+      <el-button v-if="searchText || commentStatus" style="margin-left:8px" @click="clearFilter">清除筛选</el-button>
     </div>
 
     <!-- 排序 -->
@@ -165,10 +168,10 @@ const viewMode = ref('table')
       <el-button size="small" text @click="onSort('view_count')">浏览 {{ sortBy === 'view_count' ? (sortOrder === 'asc' ?
         '↑'
         : '↓') : '' }}</el-button>
-      <el-button size="small" text @click="onSort('comment_count')">评论 {{ sortBy === 'comment_count' ? (sortOrder ===
+      <el-button size="small" text @click="onSort('comment_count')">笔记 {{ sortBy === 'comment_count' ? (sortOrder ===
         'asc'
         ? '↑' : '↓') : '' }}</el-button>
-      <el-button size="small" text @click="onSort('')">默认</el-button>
+      <el-button size="small" text @click="onSort('')">最近浏览</el-button>
 
       <!-- 视图切换 -->
       <div class="view-toggle">
@@ -200,19 +203,14 @@ const viewMode = ref('table')
               <a :href="productUrl(row.offer_id)" target="_blank" class="product-link" @click.stop>{{ row.title }}</a>
             </template>
           </el-table-column>
-          <el-table-column label="我的标签" width="180">
+          <el-table-column label="笔记状态" min-width="150">
             <template #default="{ row }">
-              <span v-if="row.tags && row.tags.length">
-                <el-tag v-for="tag in row.tags" :key="tag.id" :color="tag.bg_color"
-                  :style="{ color: tag.font_color, marginRight: '4px' }" size="small">{{ tag.text }}</el-tag>
-              </span>
-              <span v-else class="no-tags">—</span>
+              <el-tag v-if="row.comment_count > 0" type="warning" size="small" effect="light">
+                已记录 {{ row.comment_count }} 条
+              </el-tag>
+              <span v-else class="no-note">未记录</span>
             </template>
           </el-table-column>
-          <el-table-column label="我的评论" width="140" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.my_comment || '—' }}</template>
-          </el-table-column>
-          <el-table-column prop="comment_count" label="评论" width="70" align="center" />
           <el-table-column prop="view_count" label="浏览" width="70" align="center" />
         </el-table>
 
@@ -247,32 +245,20 @@ const viewMode = ref('table')
             style="width:100%;max-height:260px;border-radius:8px;margin-bottom:16px" fit="cover" />
           <h3 class="drawer-title">{{ currentProduct.title }}</h3>
           <p class="drawer-meta">供应商：{{ currentProduct.supplier_name || '未知' }}</p>
-          <p class="drawer-meta">浏览 {{ currentProduct.view_count }} 次 · {{ currentProduct.comment_count }} 条评论</p>
+          <p class="drawer-meta">浏览 {{ currentProduct.view_count }} 次 · {{ currentProduct.comment_count }} 条笔记</p>
           <el-divider />
-          <h4 class="drawer-section-title">全部标签</h4>
-          <div v-if="productTags.mine.length || productTags.others.length" class="drawer-tags">
-            <el-tag v-for="tag in productTags.mine" :key="tag.id" :color="tag.bg_color"
-              :style="{ color: tag.font_color, marginRight: '6px', marginBottom: '6px' }" size="default">{{ tag.text
-              }}<span style="opacity:0.6;font-size:10px;margin-left:2px">(我)</span></el-tag>
-            <el-tag v-for="tag in productTags.others" :key="tag.id" :color="tag.bg_color"
-              :style="{ color: tag.font_color, marginRight: '6px', marginBottom: '6px', opacity: 0.7 }"
-              size="default">{{ tag.text }}<span style="opacity:0.5;font-size:10px;margin-left:2px">({{ tag.creator
-                }})</span></el-tag>
-          </div>
-          <div v-else class="no-data">暂无标签</div>
-          <el-divider />
-          <h4 class="drawer-section-title">全部评论</h4>
+          <h4 class="drawer-section-title">我的笔记</h4>
           <div v-if="productComments.length" class="drawer-comments">
             <div v-for="c in productComments" :key="c.id" class="drawer-comment-item">
-              <div class="drawer-cmt-avatar">{{ c.username.charAt(0).toUpperCase() }}</div>
+              <div class="drawer-cmt-avatar">我</div>
               <div class="drawer-cmt-body">
-                <div class="drawer-cmt-header"><span class="drawer-cmt-name">{{ c.username }}</span><span
-                    class="drawer-cmt-time">{{ c.created_at }}</span></div>
+                <div class="drawer-cmt-header"><span
+                    class="drawer-cmt-time">{{ fmtTime(c.updated_at || c.created_at) }}</span></div>
                 <div class="drawer-cmt-text" v-html="c.text"></div>
               </div>
             </div>
           </div>
-          <div v-else class="no-data">暂无评论</div>
+          <div v-else class="no-data">暂无笔记</div>
         </div>
       </template>
       <div v-if="loadingDetail" style="text-align:center;padding:40px">加载中...</div>
@@ -292,6 +278,32 @@ const viewMode = ref('table')
   color: #999;
   font-weight: 400;
 }
+
+/* 概览统计卡片 */
+.overview-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.ov-card {
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: all .2s;
+}
+.ov-card:hover { border-color: #c9975c; }
+.ov-card.active { border-color: #c9975c; background: #fdf8f3; }
+.ov-card.static { cursor: default; }
+.ov-card.static:hover { border-color: #ebeef5; }
+.ov-num { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.ov-num.blue { color: #1677ff; }
+.ov-num.orange { color: #ff6a00; }
+.ov-num.gray { color: #909399; }
+.ov-num.green { color: #52c41a; }
+.ov-label { font-size: 12px; color: #999; margin-top: 4px; }
 
 .search-bar {
   display: flex;
@@ -333,9 +345,7 @@ const viewMode = ref('table')
   color: #c9975c;
 }
 
-.no-tags {
-  color: #ccc;
-}
+.no-note { font-size: 12px; color: #c0c4cc; }
 
 :deep(.clickable-row) {
   cursor: pointer;
@@ -363,11 +373,6 @@ const viewMode = ref('table')
   font-weight: 600;
   color: #606266;
   margin: 0 0 10px;
-}
-
-.drawer-tags {
-  display: flex;
-  flex-wrap: wrap;
 }
 
 .no-data {
@@ -412,12 +417,6 @@ const viewMode = ref('table')
   align-items: center;
   gap: 8px;
   margin-bottom: 4px;
-}
-
-.drawer-cmt-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: #303133;
 }
 
 .drawer-cmt-time {

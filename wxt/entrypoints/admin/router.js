@@ -5,7 +5,6 @@ const routes = [
   { path: '/', redirect: '/dashboard' },
   { path: '/dashboard', component: () => import('./pages/Dashboard.vue'), meta: { title: '概览' } },
   { path: '/products', component: () => import('./pages/ProductManage.vue'), meta: { title: '商品管理' } },
-  { path: '/tags', component: () => import('./pages/TagManage.vue'), meta: { title: '标签管理' } },
   { path: '/updates', component: () => import('./pages/UpdateManage.vue'), meta: { title: '更新日志' } },
   { path: '/updates/publish', component: () => import('./pages/UpdateEditor.vue'), meta: { title: '发布更新' } },
   { path: '/suppliers', component: () => import('./pages/SupplierManage.vue'), meta: { title: '供应商管理' } },

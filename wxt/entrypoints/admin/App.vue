@@ -14,7 +14,6 @@ const navItems = [
   { path: '/profile', label: '个人中心', icon: 'UserFilled' },
   { path: '/products', label: '商品管理', icon: 'Goods' },
   { path: '/suppliers', label: '供应商管理', icon: 'Shop' },
-  { path: '/tags', label: '标签管理', icon: 'CollectionTag' },
   { path: '/updates', label: '更新日志', icon: 'Clock' },
   { path: '/settings', label: '系统设置', icon: 'Setting' },
 ]
