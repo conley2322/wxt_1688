@@ -583,6 +583,15 @@ function hasCommentContent(html) {
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
   {
+    id: 'builtin-0.3.1', version: '0.3.1', title: '货源页改为左右分栏布局', status: 'published',
+    created_at: '2026-09-27T14:00:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>「我的货源」改为左右分栏：左侧供应商列表（有笔记自动置顶），点击后右侧以行列表展示该供应商的全部商品</li>'
+      + '<li>商品不再使用网格方框，每行展示图片、标题、笔记摘要、出现与浏览次数，信息一眼看清</li>'
+      + '<li>点击商品从右侧滑出详情面板：评论、浏览/出现次数、每日记录与浏览时间线</li>'
+      + '</ul>',
+  },
+  {
     id: 'builtin-0.3.0', version: '0.3.0', title: '我的货源合并页 · 删除与批量管理', status: 'published',
     created_at: '2026-09-27T12:00:00.000Z', created_by: 'Conley',
     content: '<ul>'
