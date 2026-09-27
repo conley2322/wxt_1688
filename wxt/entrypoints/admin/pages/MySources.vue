@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Delete, ArrowRight } from '@element-plus/icons-vue'
+import { Search, Delete, ArrowRight, TopRight } from '@element-plus/icons-vue'
 import { api } from '../utils/useApi.js'
 
 const groups = ref([])
@@ -55,6 +55,11 @@ const hasNotes = g => g.comment_count > 0 || g.products.some(p => p.comment_coun
 
 function selectSupplier(name) {
   currentName.value = name
+}
+
+// 商品详情页链接：有 offer_id 即可拼出，不依赖页面采集
+function productUrl(offerId) {
+  return `https://detail.1688.com/offer/${offerId}.html`
 }
 
 function pad(n) { return String(n).padStart(2, '0') }
@@ -230,6 +235,16 @@ async function deleteSupplier(g) {
               <span class="d-appear" title="出现次数">出现 {{ p.appear_count }}</span>
               <span class="d-view" title="浏览次数">浏览 {{ p.view_count }}</span>
             </div>
+            <a
+              v-if="!batchMode"
+              :href="productUrl(p.offer_id)"
+              target="_blank"
+              class="row-jump"
+              title="跳转到 1688 商品详情页"
+              @click.stop
+            >
+              跳转商品<el-icon><TopRight /></el-icon>
+            </a>
             <el-icon v-if="!batchMode" class="row-arrow"><ArrowRight /></el-icon>
           </div>
         </div>
@@ -456,6 +471,20 @@ async function deleteSupplier(g) {
 }
 .d-appear { color: #7d96bd; }
 .d-view { color: #c9975c; font-weight: 600; }
+.row-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #c9975c;
+  text-decoration: none;
+  padding: 4px 8px;
+  border: 1px solid #ecdcc7;
+  border-radius: 4px;
+  background: #fffdfb;
+}
+.row-jump:hover { background: #fdf4ea; border-color: #c9975c; }
 .row-arrow { color: #c0c4cc; flex-shrink: 0; }
 
 .no-selection { flex: 1; display: flex; align-items: center; justify-content: center; }

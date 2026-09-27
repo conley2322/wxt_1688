@@ -583,6 +583,11 @@ function hasCommentContent(html) {
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
   {
+    id: 'builtin-0.3.2', version: '0.3.2', title: '商品行新增一键跳转', status: 'published',
+    created_at: '2026-09-27T15:00:00.000Z', created_by: 'Conley',
+    content: '<ul><li>「我的货源」商品行新增「跳转商品」按钮，点击直接打开 1688 详情页，无链接的商品也能凭商品编号跳转</li></ul>',
+  },
+  {
     id: 'builtin-0.3.1', version: '0.3.1', title: '货源页改为左右分栏布局', status: 'published',
     created_at: '2026-09-27T14:00:00.000Z', created_by: 'Conley',
     content: '<ul>'
