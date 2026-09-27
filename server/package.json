@@ -1,0 +1,19 @@
+{
+  "name": "alocs-1688-server",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "ALOCS-1688 多人共享服务端 — 接收扩展端同步的笔记与浏览/出现流水",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

@@ -51,6 +51,60 @@ async function purgeProduct(offer_id) {
 }
 
 // ════════════════════════════════════
+// 远程（他人）数据合并辅助
+// ════════════════════════════════════
+const DEFAULT_MULTI_VIEW = { showOthersComments: true, showOthersViews: true, showOnListPage: true }
+
+async function getMultiSettings() {
+  const { multiSettings } = await browser.storage.local.get('multiSettings')
+  return { ...DEFAULT_MULTI_VIEW, ...(multiSettings || {}) }
+}
+
+// 商品维度他人数据（评论按最近更新降序）
+function othersForProduct(snap, offer_id, selfToken) {
+  if (!snap) return { view_count: 0, appear_count: 0, comments: [] }
+  const view_count = snap.view_records.filter(
+    r => r.offer_id === offer_id && r.token !== selfToken
+  ).length
+  const appear_count = snap.appear_records.filter(
+    r => r.offer_id === offer_id && r.token !== selfToken
+  ).length
+  const comments = snap.comments
+    .filter(c => c.kind === 'product' && c.target === String(offer_id) && c.token !== selfToken)
+    .sort((a, b) => (b.updated_at || b.created_at).localeCompare(a.updated_at || a.created_at))
+  return { view_count, appear_count, comments }
+}
+
+// 供应商维度他人笔记
+function othersForSupplier(snap, name, selfToken) {
+  if (!snap) return { comments: [] }
+  const comments = snap.comments
+    .filter(c => c.kind === 'supplier' && c.target === name && c.token !== selfToken)
+    .sort((a, b) => (b.updated_at || b.created_at).localeCompare(a.updated_at || a.created_at))
+  return { comments }
+}
+
+// 商品近 30 天他人每日聚合（与 stats 本地 daily 对齐）
+function othersDailyForProduct(snap, offer_id, selfToken) {
+  const daily = []
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const views = snap
+    ? snap.view_records.filter(r => r.offer_id === offer_id && r.token !== selfToken)
+    : []
+  const appears = snap
+    ? snap.appear_records.filter(r => r.offer_id === offer_id && r.token !== selfToken)
+    : []
+  for (let i = 29; i >= 0; i--) {
+    const dayStart = today.getTime() - i * DAY
+    daily.push({
+      view: views.filter(v => v.viewed_at >= dayStart && v.viewed_at < dayStart + DAY).length,
+      appear: appears.filter(v => v.appeared_at >= dayStart && v.appeared_at < dayStart + DAY).length,
+    })
+  }
+  return daily
+}
+
+// ════════════════════════════════════
 // 路由表
 // ════════════════════════════════════
 async function route(path, method, body, query) {
@@ -121,9 +175,13 @@ async function route(path, method, body, query) {
     for (const offer_id of uniqueIds) {
       await db.add('appear_records', { offer_id, appeared_at: Date.now() })
     }
-    const [products, records, comments, appears] = await Promise.all([
+    const [products, records, comments, appears, snap, multi, storedId] = await Promise.all([
       db.all('products'), db.all('view_records'), db.all('comments'), db.all('appear_records'),
+      db.get('remote_snapshot', 'snapshot'),
+      getMultiSettings(),
+      browser.storage.local.get('token'),
     ])
+    const selfToken = storedId.token || ''
     // 有浏览记录的商品集合（box2 计数依据）
     const viewedOfferIds = new Set(records.map(r => r.offer_id))
     const result = {}
@@ -161,6 +219,16 @@ async function route(path, method, body, query) {
         ? new Set(products.filter(x => x.supplier_name === supplierName && viewedOfferIds.has(x.offer_id)).map(x => x.offer_id)).size
         : 0
 
+      // 他人数据（受三个多人开关控制）
+      const o = multi.showOnListPage ? othersForProduct(snap, offer_id, selfToken) : null
+      const others = o
+        ? {
+            appear_count: multi.showOthersViews ? o.appear_count : 0,
+            view_count: multi.showOthersViews ? o.view_count : 0,
+            comments: multi.showOthersComments ? o.comments : [],
+          }
+        : { appear_count: 0, view_count: 0, comments: [] }
+
       result[offer_id] = {
         appear_count: apps.length,
         view_count: views.length,
@@ -170,6 +238,7 @@ async function route(path, method, body, query) {
         my_views_timeline: timeline,
         supplier_name: supplierName,
         supplier_viewed_count: supplierViewedCount,
+        others,
       }
     }
     return ok(result)
@@ -342,9 +411,13 @@ async function route(path, method, body, query) {
   const mProductStats = path.match(/^\/api\/v1\/products\/([^/]+)\/stats$/)
   if (mProductStats && method === 'GET') {
     const offer_id = decodeURIComponent(mProductStats[1])
-    const [products, records, comments, appears] = await Promise.all([
+    const [products, records, comments, appears, snap, multi, storedId] = await Promise.all([
       db.all('products'), db.all('view_records'), db.all('comments'), db.all('appear_records'),
+      db.get('remote_snapshot', 'snapshot'),
+      getMultiSettings(),
+      browser.storage.local.get('token'),
     ])
+    const selfToken = storedId.token || ''
     const views = records.filter(r => r.offer_id === offer_id)
     const apps = appears.filter(r => r.offer_id === offer_id)
     const cmts = comments.filter(c => c.kind === 'product' && c.target === offer_id)
@@ -387,7 +460,39 @@ async function route(path, method, body, query) {
       supplier_viewed_count: supplierViewedCount,
       daily,
       hourly,
+      // 他人浏览/出现（近 30 天），未连接或关闭开关时返回 0
+      others_totals: multi.showOthersViews
+        ? { view_count: othersForProduct(snap, offer_id, selfToken).view_count,
+            appear_count: othersForProduct(snap, offer_id, selfToken).appear_count }
+        : { view_count: 0, appear_count: 0 },
+      others_daily: multi.showOthersViews
+        ? othersDailyForProduct(snap, offer_id, selfToken)
+        : null,
     })
+  }
+
+  // ── 商品的他人笔记 ──  // GET /api/v1/products/:id/others
+  const mProductOthers = path.match(/^\/api\/v1\/products\/([^/]+)\/others$/)
+  if (mProductOthers && method === 'GET') {
+    const offer_id = decodeURIComponent(mProductOthers[1])
+    const [snap, multi, storedId] = await Promise.all([
+      db.get('remote_snapshot', 'snapshot'),
+      getMultiSettings(),
+      browser.storage.local.get('token'),
+    ])
+    if (!multi.showOthersComments) return ok({ comments: [] })
+    return ok(othersForProduct(snap, offer_id, storedId.token || ''))
+  }
+
+  // ── 供应商的他人笔记 ──  // GET /api/v1/suppliers/others?supplier_name=xx
+  if (path === '/api/v1/suppliers/others' && method === 'GET') {
+    const [snap, multi, storedId] = await Promise.all([
+      db.get('remote_snapshot', 'snapshot'),
+      getMultiSettings(),
+      browser.storage.local.get('token'),
+    ])
+    if (!multi.showOthersComments) return ok({ comments: [] })
+    return ok(othersForSupplier(snap, query.supplier_name, storedId.token || ''))
   }
 
   // ── 商品评论 ──
@@ -582,6 +687,17 @@ function hasCommentContent(html) {
 
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
+  {
+    id: 'builtin-0.4.0', version: '0.4.0', title: '多人共享版上线', status: 'published',
+    created_at: '2026-09-28T10:00:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>新增多人共享模式：设置页填写服务器地址与昵称即可连接，不填仍为单机模式</li>'
+      + '<li>同意「共享我的数据」后，笔记与浏览流水上传服务器，每 5 分钟自动同步，也可手动同步</li>'
+      + '<li>三个展示开关：是否显示他人笔记、是否显示他人浏览数量、是否在列表页显示，随心控制</li>'
+      + '<li>商品/供应商详情页可查看团队成员笔记，数据页趋势图叠加他人曲线</li>'
+      + '<li>列表卡片新增「跳转商品」链接，没有链接的商品也能一键打开详情页</li>'
+      + '</ul>',
+  },
   {
     id: 'builtin-0.3.2', version: '0.3.2', title: '商品行新增一键跳转', status: 'published',
     created_at: '2026-09-27T15:00:00.000Z', created_by: 'Conley',

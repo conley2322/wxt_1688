@@ -1,8 +1,8 @@
 {
   "name": "alocs-1688-standalone",
-  "description": "ALOCS-1688 单机版（数据保存在本机浏览器）",
+  "description": "ALOCS-1688（单机 / 多人共享双模式）",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",

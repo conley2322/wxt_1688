@@ -1,6 +1,7 @@
 <script setup>
 import { useApiStore } from '@/stores/api/api.js'
 import CommentInput from '@/entrypoints/win/components/CommentInput.vue'
+import OthersComments from '@/entrypoints/win/components/OthersComments.vue'
 
 const store = useApiStore()
 </script>
@@ -13,6 +14,14 @@ const store = useApiStore()
       kind="product"
       :target="String(store.currentOfferId)"
     />
+    <div class="others-wrap">
+      <OthersComments
+        v-if="store.currentOfferId"
+        :key="'others-' + store.currentOfferId"
+        kind="product"
+        :target="String(store.currentOfferId)"
+      />
+    </div>
   </div>
 </template>
 
@@ -22,5 +31,11 @@ const store = useApiStore()
   flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+/* 他人笔记区：占满剩余高度并可滚动 */
+.others-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 </style>

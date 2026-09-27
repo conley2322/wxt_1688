@@ -1,7 +1,12 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore } from '@/stores/app.js'
+import { getProfile } from '@/utils/localdb.js'
+import {
+  getRemoteConfig, connectAndRegister, updateNickname,
+  disconnect, saveRemoteConfig,
+} from '@/utils/remoteClient.js'
 
 const appStore = useAppStore()
 
@@ -101,6 +106,95 @@ function onImportFile(ev) {
   reader.readAsText(file)
 }
 
+// ════════════════════════════════════
+// 服务器连接（多人共享）
+// ════════════════════════════════════
+const connected = ref(false)
+const connecting = ref(false)
+const syncing = ref(false)
+const serverInput = ref('')
+const nicknameInput = ref('')
+const shareEnabled = ref(false)
+const multi = ref({ showOthersComments: true, showOthersViews: true, showOnListPage: true })
+const syncText = ref('尚未同步')
+
+async function refreshRemote() {
+  const cfg = await getRemoteConfig()
+  connected.value = !!cfg.serverAddress
+  if (cfg.serverAddress) serverInput.value = cfg.serverAddress
+  nicknameInput.value = cfg.nickname
+  shareEnabled.value = cfg.shareEnabled
+  multi.value = cfg.multiSettings
+  syncText.value = cfg.syncState.last_pull_at
+    ? new Date(cfg.syncState.last_pull_at).toLocaleString('zh-CN', { hour12: false })
+    : '尚未同步'
+}
+
+// 连接并注册
+async function onConnect() {
+  connecting.value = true
+  try {
+    await connectAndRegister(serverInput.value, nicknameInput.value)
+    ElMessage.success('连接成功，已完成首次同步')
+    refreshRemote()
+  } catch (e) {
+    ElMessage.error(e.message)
+  } finally {
+    connecting.value = false
+  }
+}
+
+// 修改昵称
+async function onChangeNickname() {
+  try {
+    await updateNickname(nicknameInput.value)
+    ElMessage.success('昵称已更新')
+  } catch (e) {
+    ElMessage.error(e.message)
+    refreshRemote()
+  }
+}
+
+// 共享同意开关
+async function onShareChange(v) {
+  await saveRemoteConfig({ shareEnabled: v })
+  ElMessage.success(v ? '已同意共享，下次同步时上传数据' : '已关闭共享')
+  if (v) onManualSync()
+}
+
+// 三个他人数据展示开关
+async function saveMulti() {
+  await saveRemoteConfig({ multiSettings: { ...multi.value } })
+}
+
+// 立即同步（交给 background 执行）
+async function onManualSync() {
+  syncing.value = true
+  try {
+    const res = await browser.runtime.sendMessage({ type: 'remote-sync' })
+    if (res.code !== 200) throw new Error(res.message)
+    ElMessage.success('同步完成')
+    refreshRemote()
+  } catch (e) {
+    ElMessage.error('同步失败：' + e.message)
+  } finally {
+    syncing.value = false
+  }
+}
+
+// 断开连接，回到单机模式
+async function onDisconnect() {
+  try {
+    await ElMessageBox.confirm(
+      '断开后将回到单机模式，不再显示他人数据，本机数据保留。',
+      '断开连接', { type: 'warning', confirmButtonText: '断开', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  await disconnect()
+  ElMessage.success('已断开连接')
+  refreshRemote()
+}
+
 onMounted(async () => {
   const stored = await browser.storage.local.get(['boxDefault', 'toolbarConfig', 'appSettings'])
   if (stored.boxDefault) boxDefault.value = stored.boxDefault
@@ -115,6 +209,12 @@ onMounted(async () => {
     pageSwitches.value.enableCleanUrl = stored.appSettings.enableCleanUrl ?? true
   }
   loadStorage()
+  await refreshRemote()
+  // 未连接且昵称为空时，用个人资料昵称预填
+  if (!connected.value && !nicknameInput.value) {
+    const p = await getProfile()
+    if (p.nickname && p.nickname !== '我') nicknameInput.value = p.nickname
+  }
 })
 
 // ── 所有设置修改后自动保存（无防抖，立即落盘）──
@@ -160,6 +260,84 @@ async function autoSave() {
 <template>
   <section>
     <h2 class="page-title">系统设置</h2>
+
+    <!-- 服务器连接（多人共享） -->
+    <el-card style="margin-bottom:16px">
+      <template #header>服务器连接 · 多人共享</template>
+
+      <!-- 未连接：填写地址+昵称 -->
+      <el-form v-if="!connected" label-width="100px">
+        <el-form-item label="服务器地址">
+          <el-input
+            v-model="serverInput"
+            placeholder="http://192.168.1.100:3000"
+            style="width:320px"
+          />
+        </el-form-item>
+        <el-form-item label="我的昵称">
+          <el-input
+            v-model="nicknameInput"
+            placeholder="如：阿康"
+            style="width:200px"
+            maxlength="20"
+            @keyup.enter="onConnect"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="connecting" @click="onConnect">连接并注册</el-button>
+          <span class="switch-desc" style="margin-left:12px">不连接即为单机模式，数据只保存在本机</span>
+        </el-form-item>
+      </el-form>
+
+      <!-- 已连接：状态、共享开关、他人数据开关 -->
+      <el-form v-else label-width="110px">
+        <el-form-item label="连接状态">
+          <el-tag type="success" size="small">已连接</el-tag>
+          <span style="margin-left:10px;color:#606266;font-size:13px">{{ serverInput }}</span>
+        </el-form-item>
+        <el-form-item label="我的昵称">
+          <el-input
+            v-model="nicknameInput"
+            style="width:160px"
+            maxlength="20"
+            @change="onChangeNickname"
+          />
+        </el-form-item>
+        <el-form-item label="最近同步">
+          <span style="color:#606266;font-size:13px">{{ syncText }}</span>
+          <el-button size="small" style="margin-left:12px" :loading="syncing" @click="onManualSync">立即同步</el-button>
+        </el-form-item>
+
+        <el-divider content-position="left">数据共享</el-divider>
+        <el-form-item label="共享我的数据">
+          <el-switch
+            v-model="shareEnabled"
+            active-text="同意共享"
+            inactive-text="不共享"
+            @change="onShareChange"
+          />
+          <div class="switch-desc">同意后，我的笔记与浏览/出现流水将上传服务器、团队可见；不共享也能查看他人数据</div>
+        </el-form-item>
+
+        <el-divider content-position="left">他人数据展示</el-divider>
+        <el-form-item label="他人笔记">
+          <el-switch v-model="multi.showOthersComments" @change="saveMulti" />
+          <div class="switch-desc">商品/供应商详情中显示其他人的笔记</div>
+        </el-form-item>
+        <el-form-item label="他人浏览数量">
+          <el-switch v-model="multi.showOthersViews" @change="saveMulti" />
+          <div class="switch-desc">数据页显示其他人的浏览、出现次数</div>
+        </el-form-item>
+        <el-form-item label="列表页显示">
+          <el-switch v-model="multi.showOnListPage" @change="saveMulti" />
+          <div class="switch-desc">1688 搜索/店铺列表卡片上显示其他人的笔记与数量</div>
+        </el-form-item>
+
+        <el-form-item>
+          <el-button type="danger" plain @click="onDisconnect">断开连接（回到单机模式）</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
 
     <el-card style="margin-bottom:16px">
       <template #header>基础设置</template>

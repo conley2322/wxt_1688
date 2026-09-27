@@ -42,25 +42,66 @@ async function loadStats(id) {
   }
 }
 
+// 他人数据开关是否开启（开启时 localapi 才返回 others_daily）
+const showOthers = () => !!stats.value?.others_daily
+
 function rangeData() {
   const daily = stats.value.daily || []
-  return daily.slice(daily.length - range.value)
+  const odaily = stats.value.others_daily || []
+  return {
+    mine: daily.slice(daily.length - range.value),
+    others: odaily.slice(odaily.length - range.value),
+  }
 }
 
-// ── 近 N 天出现 + 浏览双折线图 ──
+// ── 近 N 天出现 + 浏览双折线图（开启他人展示时追加两条虚线）──
 function renderTrend() {
   if (!trendEl.value) return
   if (!trendChart) trendChart = echarts.init(trendEl.value)
-  const data = rangeData()
+  const { mine, others } = rangeData()
+  const withOthers = showOthers()
+  const legendData = withOthers
+    ? ['出现', '浏览', '他人出现', '他人浏览']
+    : ['出现', '浏览']
+  const series = [
+    {
+      name: '出现', type: 'line', smooth: true, symbol: 'circle', symbolSize: 4,
+      data: mine.map(d => d.appear),
+      itemStyle: { color: '#ff6a00' },
+      areaStyle: { color: 'rgba(255,106,0,.08)' },
+    },
+    {
+      name: '浏览', type: 'line', smooth: true, symbol: 'circle', symbolSize: 4,
+      data: mine.map(d => d.view),
+      itemStyle: { color: '#1677ff' },
+      areaStyle: { color: 'rgba(22,119,255,.08)' },
+    },
+  ]
+  if (withOthers) {
+    series.push(
+      {
+        name: '他人出现', type: 'line', smooth: true, symbol: 'none',
+        data: others.map(d => d.appear),
+        lineStyle: { type: 'dashed', width: 1.5, color: '#ffb066' },
+        itemStyle: { color: '#ffb066' },
+      },
+      {
+        name: '他人浏览', type: 'line', smooth: true, symbol: 'none',
+        data: others.map(d => d.view),
+        lineStyle: { type: 'dashed', width: 1.5, color: '#79aefc' },
+        itemStyle: { color: '#79aefc' },
+      }
+    )
+  }
   trendChart.setOption({
     grid: { left: 28, right: 12, top: 28, bottom: 22 },
     tooltip: { trigger: 'axis' },
     legend: {
-      data: ['出现', '浏览'], top: 0, right: 0,
+      data: legendData, top: 0, right: 0,
       itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11, color: '#666' },
     },
     xAxis: {
-      type: 'category', data: data.map(d => d.date), boundaryGap: false,
+      type: 'category', data: mine.map(d => d.date), boundaryGap: false,
       axisLine: { lineStyle: { color: '#eee' } },
       axisLabel: { color: '#999', fontSize: 10, interval: range.value > 14 ? 3 : 1 },
       axisTick: { show: false },
@@ -70,21 +111,8 @@ function renderTrend() {
       axisLabel: { color: '#999', fontSize: 10 },
       splitLine: { lineStyle: { color: '#f5f5f5' } },
     },
-    series: [
-      {
-        name: '出现', type: 'line', smooth: true, symbol: 'circle', symbolSize: 4,
-        data: data.map(d => d.appear),
-        itemStyle: { color: '#ff6a00' },
-        areaStyle: { color: 'rgba(255,106,0,.08)' },
-      },
-      {
-        name: '浏览', type: 'line', smooth: true, symbol: 'circle', symbolSize: 4,
-        data: data.map(d => d.view),
-        itemStyle: { color: '#1677ff' },
-        areaStyle: { color: 'rgba(22,119,255,.08)' },
-      },
-    ],
-  })
+    series,
+  }, true)
 }
 
 function changeRange(days) {
@@ -166,6 +194,17 @@ onBeforeUnmount(() => {
           <div class="stat-num purple">{{ stats.supplier_viewed_count }}</div>
           <div class="stat-label">同店已看商品</div>
         </div>
+        <!-- 他人数据（仅在开关开启时显示） -->
+        <template v-if="showOthers()">
+          <div class="stat-card">
+            <div class="stat-num blue-light">{{ stats.others_totals.view_count }}</div>
+            <div class="stat-label">他人浏览</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num orange-light">{{ stats.others_totals.appear_count }}</div>
+            <div class="stat-label">他人出现</div>
+          </div>
+        </template>
       </div>
 
       <!-- 趋势图 -->
@@ -216,17 +255,19 @@ onBeforeUnmount(() => {
 
 /* 统计卡片 */
 .stat-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
 }
 .stat-card {
   background: #fafbfc; border: 1px solid #f0f0f0; border-radius: 8px;
-  padding: 10px; text-align: center;
+  padding: 10px 6px; text-align: center;
 }
 .stat-num { font-size: 20px; font-weight: 700; line-height: 1.2; }
 .stat-num.blue { color: #1677ff; }
 .stat-num.orange { color: #ff6a00; }
 .stat-num.green { color: #52c41a; }
 .stat-num.purple { color: #9b59b6; }
+.stat-num.blue-light { color: #79aefc; }
+.stat-num.orange-light { color: #ffb066; }
 .stat-label { font-size: 11px; color: #999; margin-top: 2px; }
 
 /* 图表区块 */
