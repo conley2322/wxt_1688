@@ -60,6 +60,12 @@ async function getMultiSettings() {
   return { ...DEFAULT_MULTI_VIEW, ...(multiSettings || {}) }
 }
 
+// 远程评论的时间可能是数字时间戳或 ISO 字符串，统一转毫秒数
+function commentTime(c) {
+  const v = c.updated_at || c.created_at
+  return typeof v === 'number' ? v : new Date(v).getTime()
+}
+
 // 商品维度他人数据（评论按最近更新降序）
 function othersForProduct(snap, offer_id, selfToken) {
   if (!snap) return { view_count: 0, appear_count: 0, comments: [] }
@@ -71,7 +77,7 @@ function othersForProduct(snap, offer_id, selfToken) {
   ).length
   const comments = snap.comments
     .filter(c => c.kind === 'product' && c.target === String(offer_id) && c.token !== selfToken)
-    .sort((a, b) => (b.updated_at || b.created_at).localeCompare(a.updated_at || a.created_at))
+    .sort((a, b) => commentTime(b) - commentTime(a))
   return { view_count, appear_count, comments }
 }
 
@@ -80,7 +86,7 @@ function othersForSupplier(snap, name, selfToken) {
   if (!snap) return { comments: [] }
   const comments = snap.comments
     .filter(c => c.kind === 'supplier' && c.target === name && c.token !== selfToken)
-    .sort((a, b) => (b.updated_at || b.created_at).localeCompare(a.updated_at || a.created_at))
+    .sort((a, b) => commentTime(b) - commentTime(a))
   return { comments }
 }
 
@@ -687,6 +693,14 @@ function hasCommentContent(html) {
 
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
+  {
+    id: 'builtin-0.4.1', version: '0.4.1', title: '修复跨电脑评论不显示', status: 'published',
+    created_at: '2026-09-27T12:30:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>修复另一台电脑发表的商品/供应商评论在本机不显示的问题：远程评论时间为时间戳，排序时误用字符串方法导致接口报错</li>'
+      + '<li>列表卡片的团队留言与他人计数同步恢复正常</li>'
+      + '</ul>',
+  },
   {
     id: 'builtin-0.4.0', version: '0.4.0', title: '多人共享版上线', status: 'published',
     created_at: '2026-09-28T10:00:00.000Z', created_by: 'Conley',
