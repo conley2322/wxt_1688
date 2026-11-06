@@ -52,3 +52,6 @@ server/uploads/
 _temp/
 skills-lock.json
 .claude/settings.local.json
+
+# 扩展签名私钥（严禁提交，泄露=别人可冒充发布）
+.keys

@@ -2,6 +2,15 @@
 
 所有版本的更新记录都写在这里。发新版本时：更新 `wxt/package.json` 的 `version` → 在本文件顶部加一节 → 提交并打 `vx.y.z` 标签推送 → 在 GitHub 创建同名 Release。
 
+## v1.0.0（2026-11-06，standalone-local 分支）首个正式发行版
+
+1. **适配 1688 搜索页 2026-11 改版**：旧选择器 `.feeds-wrapper` 已失效，新增 `offerList--xxx > gridCell--xxx > a.offerCard--xxx` 规则；卡片为固定高度，box 改挂外层格子容器，不再溢出遮挡下一行
+2. **供应商名提取适配新结构**：改从 `shopRow--xxx` 内的店铺子域名链接读取（旧 `a.offer-desc-item` 已废弃）
+3. **新增埋点属性兜底扫描**：常规选择器全部失效时，自动改用阿里统一埋点属性（`data-renderkey` / `data-aplus-report` / `offerId` 链接）定位卡片，1688 再次改版也能自动接管
+4. **适配失效不再静默**：常规规则与兜底扫描均未找到卡片时，页面右上角提示「页面结构疑似改版」，便于及时反馈
+5. **扩展 ID 固定**：manifest 写入 `key`，扩展 ID 永久为 `jfmjpidelkddbbfdjaopimehhconoekm`，与安装路径/版本号无关，升级不丢数据
+6. 正式发行：补齐页面标题（不再显示「默认插件」），提供签名 CRX 与 ZIP 两种安装包
+
 ## v0.4.2（2026-09-27，standalone-local 分支）
 
 1. 数据页新增「浏览时间轴」：合并本机与团队成员的浏览记录，每条显示浏览者昵称与时间

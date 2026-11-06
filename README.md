@@ -84,7 +84,18 @@ wxt_1688/
 
 ## 快速开始
 
-### 单机模式（最简单）
+### 安装发行版（推荐给同事 / 非开发使用）
+
+从 [Releases](../../releases) 下载对应文件，两种装法任选：
+
+| 文件 | 装法 | 适用 |
+|---|---|---|
+| `alocs-1688-standalone-<版本>-chrome.zip` | 解压 → `chrome://extensions` → 开启右上角「开发者模式」→「加载已解压的扩展程序」→ 选择解压目录 | **推荐**，Chrome / Edge / QQ 浏览器均可，不受商店限制 |
+| `alocs-1688-<版本>.crx` | 直接拖入 `chrome://extensions` 页面 | 部分浏览器会提示「不是来自商店」并禁用，需手动启用 |
+
+> 扩展 ID 已通过 manifest `key` 固定为 `jfmjpidelkddbbfdjaopimehhconoekm`，与安装路径、版本号无关。**同一个浏览器里重复安装不会产生多个 ID，数据也不会因升级丢失。**
+
+### 从源码构建（单机模式）
 
 ```bash
 cd wxt
