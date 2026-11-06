@@ -20,7 +20,15 @@ function extractSupplierName(card) {
     const t = shopNameEl.textContent.trim()
     if (t && t.length <= 40) return t
   }
-  // 搜索页卡片：a.offer-desc-item 中指向店铺子域名的链接
+  // 2026-11 改版搜索页卡片：shopRow--xxx 内指向店铺子域名的链接（如 hongchuan88.1688.com）
+  for (const a of card.querySelectorAll('[class*="shopRow"] a[href]')) {
+    const m = (a.getAttribute('href') || '').match(/^https?:\/\/([a-z0-9-]+)\.1688\.com/i)
+    if (m && !NON_SHOP_HOSTS.has(m[1].toLowerCase())) {
+      const t = a.textContent.trim()
+      if (t && t.length <= 40) return t
+    }
+  }
+  // 旧版搜索页卡片：a.offer-desc-item 中指向店铺子域名的链接
   for (const a of card.querySelectorAll('a.offer-desc-item')) {
     const m = (a.getAttribute('href') || '').match(/^https?:\/\/([a-z0-9-]+)\.1688\.com/i)
     if (m && !NON_SHOP_HOSTS.has(m[1].toLowerCase())) {
@@ -130,11 +138,15 @@ export default defineContentScript({
 
     // ── 挂载卡片 UI ──
     function mountCard(item, offerId, opts = {}) {
+      // mountTarget：容器实际追加位置。新版搜索页卡片 a.offerCard--xxx 是固定高度，
+      // box 必须挂到外层 gridCell--xxx 容器才能正常撑开布局（已在真实页面验证）
+      const mountTarget = opts.mountTarget || item
       const container = document.createElement('div')
       if (opts.wrapperClass) container.className = opts.wrapperClass
-      item.appendChild(container)
+      if (opts.mountTarget) container.style.marginTop = '4px'
+      mountTarget.appendChild(container)
       const app = createApp(App, {
-        parentEl: item,
+        parentEl: opts.parentEl || item,
         offerId,
         batchCache
       })
@@ -157,11 +169,15 @@ export default defineContentScript({
     // A. 搜索/货源/首页/以图搜图 列表页（DOM 选择器规则）
     // ════════════════════════════════════════════════
     const renderConfigs = [
-      { parent: '.feeds-wrapper', child: '> a' },
+      // 旧版搜索页瀑布流（部分用户仍命中）
+      { key: 'search', parent: '.feeds-wrapper', child: '> a' },
+      // 2026-11 改版搜索页：offerList--xxx > gridCell--xxx > a.offerCard--xxx（卡片固定高度，
+      // box 挂到 gridCell 容器；卡片 class 带构建 hash，必须用前缀匹配）
+      { key: 'search', parent: '[class*="offerList--"]', child: '[class*="offerCard--"]', mountIntoCell: true },
       // 货源列表 / 以图搜图页（air.1688.com/kapp/1688-search/pc-image-search，卡片为 searchOfferWrapper--xxx）
-      { parent: '[class*="offerListLayoutWrapper"]', child: '[class*="searchOfferWrapper"]' },
+      { key: 'offerList', parent: '[class*="offerListLayoutWrapper"]', child: '[class*="searchOfferWrapper"]' },
       // 首页推荐/精选货源：卡片本身是 .offer-card-container，offerId 在 data-aplus-report 属性里
-      { parent: '.swiper-slide .list-padding', child: '.offer-card-container' },
+      { key: 'home', parent: '.swiper-slide .list-padding', child: '.offer-card-container' },
     ]
 
     function extractOfferId(el) {
@@ -201,8 +217,8 @@ export default defineContentScript({
       await requestBatch([...offerIds], 'list', supplierMap)
     }
 
-    const render = (parentSelector, childSelector) => {
-      const selector = `${parentSelector} ${childSelector}`
+    const render = (cfg) => {
+      const selector = `${cfg.parent} ${cfg.child}`
       let mounted = 0
       document.querySelectorAll(selector).forEach((item) => {
         if (item.dataset.rendered) return
@@ -213,7 +229,12 @@ export default defineContentScript({
         if (!offerId) return
         try {
           console.log(`[box:list] 挂载卡片: offerId=${offerId}`)
-          mountCard(item, offerId)
+          const opts = {}
+          if (cfg.mountIntoCell && item.parentElement) {
+            opts.mountTarget = item.parentElement
+            opts.parentEl = item.parentElement
+          }
+          mountCard(item, offerId, opts)
           mounted++
         } catch (e) {
           // 单卡挂载失败不影响其余卡片
@@ -224,17 +245,18 @@ export default defineContentScript({
     }
 
     const renderAll = async () => {
-      // 渲染开关
+      // 渲染开关（按 key 分组：search/offerList/home）
       let cfgs = renderConfigs
       try {
         const stored = await browser.storage.local.get('appSettings')
         const s = stored.appSettings || {}
-        cfgs = [
-          s.enableSearchList !== false ? renderConfigs[0] : null,
-          s.enableOfferList !== false ? renderConfigs[1] : null,
-          s.enableHomeRecommend !== false ? renderConfigs[2] : null,
-        ].filter(Boolean)
-        console.log(`[box:list] 渲染开关: search=${s.enableSearchList !== false}, offerList=${s.enableOfferList !== false}, home=${s.enableHomeRecommend !== false}`)
+        const flags = {
+          search: s.enableSearchList !== false,
+          offerList: s.enableOfferList !== false,
+          home: s.enableHomeRecommend !== false,
+        }
+        cfgs = renderConfigs.filter(cfg => flags[cfg.key])
+        console.log(`[box:list] 渲染开关: search=${flags.search}, offerList=${flags.offerList}, home=${flags.home}`)
       } catch (e) {
         console.error('[box:list] 读取设置失败:', e)
       }
@@ -242,7 +264,7 @@ export default defineContentScript({
       if (cfgs.length === 0) return
       loadBatchData(cfgs)
       let mounted = 0
-      cfgs.forEach(cfg => { mounted += render(cfg.parent, cfg.child) })
+      cfgs.forEach(cfg => { mounted += render(cfg) })
       if (mounted > 0) console.log(`[box:list] 本轮新挂载 ${mounted} 张卡片`)
     }
 
