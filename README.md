@@ -95,6 +95,33 @@ wxt_1688/
 
 > 扩展 ID 已通过 manifest `key` 固定为 `jfmjpidelkddbbfdjaopimehhconoekm`，与安装路径、版本号无关。**同一个浏览器里重复安装不会产生多个 ID，数据也不会因升级丢失。**
 
+### 本地自用：已装扩展的原位覆盖更新（免重装技巧）
+
+不想走「移除旧扩展 → 重装新扩展」流程时，可以把新构建**直接覆盖进浏览器已装的扩展目录**，重启浏览器即生效，数据（IndexedDB）完全不受影响：
+
+```bash
+# 1. 构建新版本
+cd wxt && npm run build
+
+# 2. 找到已装扩展目录（扩展 ID / 版本号_0 目录名，路径因浏览器而异）
+#    QQ 浏览器: ~/Library/Application Support/QQBrowser3/Default/Extensions/<扩展ID>/<版本>_0
+#    Chrome:    ~/Library/Application Support/Google/Chrome/Default/Extensions/<扩展ID>/<版本>_0
+#    扩展 ID 可在 chrome://extensions 页面或 <数据目录>/Default/Secure Preferences 里查到
+
+# 3. 备份 → 整目录覆盖
+cp -R "<扩展目录>" /tmp/ext-backup-$(date +%m%d-%H%M%S)
+rm -rf "<扩展目录>"
+cp -R wxt/.output/chrome-mv3 "<扩展目录>"
+
+# 4. 重启浏览器（只刷新页面无效，渲染进程缓存着旧脚本）
+```
+
+三条铁律：
+
+1. **目录名别动**（保持 `<版本>_0` 原名）：浏览器注册表里记录的就是这条路径，改名会导致扩展失效；
+2. **必须整目录替换**：`assets/` 文件名带内容 hash，只丢几个文件会新旧混杂；
+3. **⚠️ 如果新构建的 manifest 带 `key` 字段，覆盖后必须删掉它**：`key` 会让浏览器按公钥重算扩展 ID，与注册表里按路径派生的旧 ID 对不上，扩展会被直接禁用。`python3 -c "import json;p='<扩展目录>/manifest.json';m=json.load(open(p));m.pop('key',None);json.dump(m,open(p,'w'))"` 一行即可。带 `key` 的完整构建只用于对外发行的 CRX/ZIP。
+
 ### 从源码构建（单机模式）
 
 ```bash
