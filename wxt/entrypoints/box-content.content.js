@@ -244,6 +244,45 @@ export default defineContentScript({
       return mounted
     }
 
+    // ── 通用兜底：1688 改版会整体更换 CSS class（带构建 hash），但埋点属性全站统一且稳定 ──
+    // data-renderkey（…_商品ID 结尾）/ data-aplus-report（object_id@商品ID）/ a[href*="offerId="]
+    // 是阿里统一埋点体系的属性，历史多次改版均未变动，作为常规规则全部失效时的自动接管。
+    function genericFindCards() {
+      const seen = new Set()
+      const cards = []
+      for (const el of document.querySelectorAll('[data-renderkey], a[href*="offerId="]')) {
+        const id = extractOfferId(el)
+        if (!id || seen.has(id)) continue
+        // 只取最外层卡片根：祖先已入选的嵌套元素跳过，避免重复挂载
+        if (cards.some(c => c.contains(el))) continue
+        seen.add(id)
+        cards.push(el)
+      }
+      return cards
+    }
+
+    function renderGeneric() {
+      const cards = genericFindCards()
+      console.log(`[box:list] 常规规则未命中，埋点属性兜底扫描到 ${cards.length} 张卡片`)
+      let mounted = 0
+      for (const el of cards) {
+        if (el.dataset.rendered) continue
+        const offerId = extractOfferId(el)
+        if (!offerId) continue
+        try {
+          // <a> 卡片挂到外层容器（新版卡片多为固定高度，挂进去会溢出遮挡），其余挂自身
+          const target = (el.tagName === 'A' && el.parentElement) ? el.parentElement : el
+          const opts = target === el ? {} : { mountTarget: target, parentEl: target }
+          mountCard(el, offerId, opts)
+          el.dataset.rendered = 'true'
+          mounted++
+        } catch (e) {
+          console.error('[box:list] 兜底挂载失败:', offerId, e)
+        }
+      }
+      return mounted
+    }
+
     const renderAll = async () => {
       // 渲染开关（按 key 分组：search/offerList/home）
       let cfgs = renderConfigs
@@ -265,8 +304,19 @@ export default defineContentScript({
       loadBatchData(cfgs)
       let mounted = 0
       cfgs.forEach(cfg => { mounted += render(cfg) })
-      if (mounted > 0) console.log(`[box:list] 本轮新挂载 ${mounted} 张卡片`)
+      // 常规规则全部失效 → 埋点属性兜底扫描（1688 改版自动适配）
+      if (mounted === 0) {
+        mounted += renderGeneric()
+      }
+      if (mounted > 0) {
+        console.log(`[box:list] 本轮新挂载 ${mounted} 张卡片`)
+      } else if (!adaptWarned) {
+        adaptWarned = true
+        showToast('ALOCS 插件：1688 页面结构疑似改版，box 未能挂载，请反馈更新插件')
+        console.error('[box:list] ⚠️ 1688 页面结构疑似改版：常规规则与埋点兜底均未找到商品卡片，box 适配失效')
+      }
     }
+    let adaptWarned = false
 
     // ════════════════════════════════════════════════
     // B. 供应商店铺页（React fiber 扫描由 box-scan 主世界完成）
