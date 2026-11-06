@@ -137,11 +137,41 @@ export default defineContentScript({
     }
 
     // ── 挂载卡片 UI ──
+    // 同一个容器里出现多套 box（多规则命中 / 历史挂载残留）时，只保留第一套
+    function dedupeBoxes(root) {
+      const runs = []
+      let cur = null
+      for (const child of [...root.children]) {
+        if (child.classList && child.classList.contains('box-card')) {
+          if (!cur) { cur = []; runs.push(cur) }
+          cur.push(child)
+        } else {
+          cur = null
+        }
+      }
+      if (runs.length > 1) {
+        runs.slice(1).forEach(run => run.forEach(n => n.remove()))
+      }
+      // 卡片内容里残留的 box（旧规则把 box 挂进了卡片内部）：根下已有正确挂载时清掉
+      if (runs.length >= 1) {
+        const keep = runs[0][0]
+        root.querySelectorAll('.box-card').forEach(n => {
+          if (n === keep || keep.contains(n)) return
+          const p = n.parentElement
+          if (p && p !== root && !p.closest('.box-card')) n.remove()
+        })
+      }
+    }
+
     function mountCard(item, offerId, opts = {}) {
       // mountTarget：容器实际追加位置。新版搜索页卡片 a.offerCard--xxx 是固定高度，
       // box 必须挂到外层 gridCell--xxx 容器才能正常撑开布局（已在真实页面验证）
       const mountTarget = opts.mountTarget || item
+      dedupeBoxes(mountTarget)
+      // 已有 box 就不再挂（防止多规则重复命中）
+      if (mountTarget.querySelector('.box-main-card')) return false
       const container = document.createElement('div')
+      container.setAttribute('data-alocs-box', '1')
       if (opts.wrapperClass) container.className = opts.wrapperClass
       if (opts.mountTarget) container.style.marginTop = '4px'
       mountTarget.appendChild(container)
@@ -171,28 +201,48 @@ export default defineContentScript({
     const renderConfigs = [
       // 旧版搜索页瀑布流（部分用户仍命中）
       { key: 'search', parent: '.feeds-wrapper', child: '> a' },
-      // 2026-11 改版搜索页：offerList--xxx > gridCell--xxx > a.offerCard--xxx（卡片固定高度，
-      // box 挂到 gridCell 容器；卡片 class 带构建 hash，必须用前缀匹配）
-      { key: 'search', parent: '[class*="offerList--"]', child: '[class*="offerCard--"]', mountIntoCell: true },
+      // 2026-11 改版搜索页：list.offerList--xxx > cell.gridCell--xxx > (a.offerCard--xxx | div.ad-offer)
+      // 以 gridCell 为挂载单元：普通卡与广告位（div.ad-offer）共用同一个格子容器，
+      // 一并覆盖；卡片固定高度，box 挂在格子里才能撑开布局不遮挡
+      { key: 'search', parent: '[class*="offerList--"]', child: '[class*="gridCell--"]', mountSelf: true },
       // 货源列表 / 以图搜图页（air.1688.com/kapp/1688-search/pc-image-search，卡片为 searchOfferWrapper--xxx）
       { key: 'offerList', parent: '[class*="offerListLayoutWrapper"]', child: '[class*="searchOfferWrapper"]' },
       // 首页推荐/精选货源：卡片本身是 .offer-card-container，offerId 在 data-aplus-report 属性里
       { key: 'home', parent: '.swiper-slide .list-padding', child: '.offer-card-container' },
     ]
 
+    // offer_id 提取：读埋点属性优先，其次链接参数。
+    // 1688 的 data-aplus-report 是「^」分隔的埋点串，可用字段：
+    //   item_id@商品ID（搜索卡 / P4P 广告 / 右侧广告位都有）
+    //   offerId@商品ID（右侧广告位 right_offer）
+    //   object_id@商品ID + object_type@offer（P4P 广告）
+    // 注意 data-key-value="offer_xxx" 不是商品 ID，不能读
+    function readOfferIdFromNode(node) {
+      if (!node || !node.getAttribute) return ''
+      const href = node.getAttribute('href') || ''
+      const renderkey = node.getAttribute('data-renderkey') || ''
+      const aplus = node.getAttribute('data-aplus-report') || ''
+      return (
+        renderkey.match(/_(\d+)$/)?.[1] ||
+        aplus.match(/item_id@(\d+)/)?.[1] ||
+        aplus.match(/offerId@(\d+)/)?.[1] ||
+        (/(?:\^|^)object_type@(?:offer|right_offer)/.test(aplus) ? aplus.match(/object_id@(\d+)/)?.[1] : '') ||
+        href.match(/offerId=(\d+)/)?.[1] ||
+        (node.href || '').match(/offerId=(\d+)/)?.[1] ||
+        ''
+      )
+    }
+
     function extractOfferId(el) {
-      const href = el.getAttribute('href') || ''
-      const dataRenderkey = el.getAttribute('data-renderkey') || ''
-      const dataAplus = el.getAttribute('data-aplus-report') || ''
-      const linkEl = el.querySelector('a[href*="offerId="]') || el
-
-      const matchHref = href.match(/offerId=(\d+)/)?.[1]
-      const matchRenderkey = dataRenderkey.match(/_(\d+)$/)?.[1]
-      const matchOfferId = dataAplus.match(/offerId@(\d+)/)?.[1]
-      const matchObjectId = dataAplus.match(/object_id@(\d+)/)?.[1]
-      const matchLinkHref = linkEl?.href?.match(/offerId=(\d+)/)?.[1]
-
-      return matchRenderkey || matchHref || matchOfferId || matchObjectId || matchLinkHref
+      // 1) 元素自身（卡片锚点 / 广告位锚点）
+      const own = readOfferIdFromNode(el)
+      if (own) return own
+      // 2) 内部节点：以 gridCell 为单元时，卡片与广告位都在里面
+      for (const node of el.querySelectorAll('[data-renderkey], [data-aplus-report], a[href*="offerId="]')) {
+        const id = readOfferIdFromNode(node)
+        if (id) return id
+      }
+      return ''
     }
 
     async function loadBatchData(configs) {
@@ -219,29 +269,53 @@ export default defineContentScript({
 
     const render = (cfg) => {
       const selector = `${cfg.parent} ${cfg.child}`
+      const nodes = document.querySelectorAll(selector)
       let mounted = 0
-      document.querySelectorAll(selector).forEach((item) => {
-        if (item.dataset.rendered) return
-        item.dataset.rendered = 'true'
-
+      let matched = nodes.length
+      nodes.forEach((item) => {
         const offerId = extractOfferId(item)
-        // 提取不到 offer_id 的卡片（广告位/异构卡片）不挂载
+        // 提取不到 offer_id 的格子（空位/纯图片广告）不挂载
         if (!offerId) return
+
+        if (item.dataset.rendered) {
+          // 广告位会轮播换品：格子没变但商品换了 → 拆掉旧 box 重挂
+          if (item.dataset.boxOfferId && item.dataset.boxOfferId !== offerId) {
+            // 挂载后包装容器已被拆掉，box 是格子的直接子节点，按类名整体清除
+            item.querySelectorAll('.box-card').forEach(n => n.remove())
+            delete item.dataset.rendered
+          } else {
+            dedupeBoxes(item)
+            return
+          }
+        } else if (item.querySelector('.box-main-card')) {
+          // 已由其它规则挂过，避免重复
+          dedupeBoxes(item)
+          item.dataset.rendered = 'true'
+          item.dataset.boxOfferId = offerId
+          return
+        }
+
+        item.dataset.rendered = 'true'
+        item.dataset.boxOfferId = offerId
         try {
           console.log(`[box:list] 挂载卡片: offerId=${offerId}`)
           const opts = {}
-          if (cfg.mountIntoCell && item.parentElement) {
+          if (cfg.mountSelf) {
+            // 以格子为单元：普通卡与广告位都挂进格子本身
+            opts.mountTarget = item
+            opts.parentEl = item
+          } else if (cfg.mountIntoCell && item.parentElement) {
             opts.mountTarget = item.parentElement
             opts.parentEl = item.parentElement
           }
-          mountCard(item, offerId, opts)
-          mounted++
+          const ok = mountCard(item, offerId, opts)
+          if (ok !== false) mounted++
         } catch (e) {
           // 单卡挂载失败不影响其余卡片
           console.error('[box:list] 挂载失败:', offerId, e)
         }
       })
-      return mounted
+      return { mounted, matched }
     }
 
     // ── 通用兜底：1688 改版会整体更换 CSS class（带构建 hash），但埋点属性全站统一且稳定 ──
@@ -250,7 +324,7 @@ export default defineContentScript({
     function genericFindCards() {
       const seen = new Set()
       const cards = []
-      for (const el of document.querySelectorAll('[data-renderkey], a[href*="offerId="]')) {
+      for (const el of document.querySelectorAll('[data-renderkey], a[href*="offerId="], [data-aplus-report*="item_id@"]')) {
         const id = extractOfferId(el)
         if (!id || seen.has(id)) continue
         // 只取最外层卡片根：祖先已入选的嵌套元素跳过，避免重复挂载
@@ -269,13 +343,16 @@ export default defineContentScript({
         if (el.dataset.rendered) continue
         const offerId = extractOfferId(el)
         if (!offerId) continue
+        // 所在格子已有 box（常规规则已挂过）就跳过，防止重复
+        const cell = el.closest('[class*="gridCell--"]')
+        if (cell && cell.querySelector('.box-main-card')) continue
         try {
           // <a> 卡片挂到外层容器（新版卡片多为固定高度，挂进去会溢出遮挡），其余挂自身
           const target = (el.tagName === 'A' && el.parentElement) ? el.parentElement : el
           const opts = target === el ? {} : { mountTarget: target, parentEl: target }
-          mountCard(el, offerId, opts)
           el.dataset.rendered = 'true'
-          mounted++
+          const ok = mountCard(el, offerId, opts)
+          if (ok !== false) mounted++
         } catch (e) {
           console.error('[box:list] 兜底挂载失败:', offerId, e)
         }
@@ -303,14 +380,19 @@ export default defineContentScript({
       if (cfgs.length === 0) return
       loadBatchData(cfgs)
       let mounted = 0
-      cfgs.forEach(cfg => { mounted += render(cfg) })
-      // 常规规则全部失效 → 埋点属性兜底扫描（1688 改版自动适配）
-      if (mounted === 0) {
+      let matched = 0
+      cfgs.forEach(cfg => {
+        const r = render(cfg)
+        mounted += r.mounted
+        matched += r.matched
+      })
+      // 常规规则在页面上一个卡片都没匹配到（通常是 1688 改版换了 class）→ 埋点属性兜底扫描
+      if (matched === 0) {
         mounted += renderGeneric()
       }
       if (mounted > 0) {
         console.log(`[box:list] 本轮新挂载 ${mounted} 张卡片`)
-      } else if (!adaptWarned) {
+      } else if (matched === 0 && !adaptWarned) {
         adaptWarned = true
         showToast('ALOCS 插件：1688 页面结构疑似改版，box 未能挂载，请反馈更新插件')
         console.error('[box:list] ⚠️ 1688 页面结构疑似改版：常规规则与埋点兜底均未找到商品卡片，box 适配失效')
