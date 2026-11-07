@@ -1072,6 +1072,13 @@ function hasCommentContent(html) {
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
   {
+    id: 'builtin-1.1.1', version: '1.1.1', title: '修复客服页信息页图表宽度异常', status: 'published',
+    created_at: '2026-11-07T20:00:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>【修复了什么】客服页「信息」页图表在页签隐藏/切回后宽度异常：切到 聊天/商品/备注 再切回「信息」时，分布流量时段、星期×小时热力图等图表框被压窄。改为图表组件内置 ResizeObserver 按真实宽度重绘，不再依赖外部尺寸计算</li>'
+      + '</ul>',
+  },
+  {
     id: 'builtin-1.1.0', version: '1.1.0', title: '旺旺客服页「备注」面板 + 聊天实时采集 + 数据展示', status: 'published',
     created_at: '2026-11-07T18:00:00.000Z', created_by: 'Conley',
     content: '<ul>'
