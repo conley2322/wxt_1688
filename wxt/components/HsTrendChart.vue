@@ -19,9 +19,12 @@ const props = defineProps({
 })
 const chartEl = ref(null)
 let chart = null
+let ro = null
 
 function render() {
   if (!chartEl.value) return
+  // 容器隐藏（宽度为 0）时跳过渲染，等可见（ResizeObserver 触发）后按真实尺寸重绘
+  if (chartEl.value.offsetWidth < 10) return
   if (!chart) chart = echarts.init(chartEl.value)
   const daily = props.daily || []
   chart.setOption({
@@ -55,10 +58,19 @@ function render() {
 
 onMounted(async () => {
   await nextTick()
+  // 容器尺寸变化（含 v-show 隐藏→可见、抽屉动画）时按真实宽度重绘
+  ro = new ResizeObserver(() => {
+    if (!chartEl.value || chartEl.value.offsetWidth < 10) return
+    requestAnimationFrame(render)
+  })
+  ro.observe(chartEl.value)
   render()
 })
 watch(() => props.daily, render, { deep: true })
-onBeforeUnmount(() => { try { chart && chart.dispose() } catch {} })
+onBeforeUnmount(() => {
+  try { ro && ro.disconnect() } catch {}
+  try { chart && chart.dispose() } catch {}
+})
 </script>
 
 <style scoped>

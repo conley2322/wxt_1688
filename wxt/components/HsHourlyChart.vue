@@ -18,9 +18,11 @@ const props = defineProps({
 })
 const chartEl = ref(null)
 let chart = null
+let ro = null
 
 function render() {
   if (!chartEl.value) return
+  if (chartEl.value.offsetWidth < 10) return
   if (!chart) chart = echarts.init(chartEl.value)
   const data = props.hourly || []
   chart.setOption({
@@ -48,9 +50,17 @@ function render() {
 
 onMounted(async () => {
   await nextTick()
+  ro = new ResizeObserver(() => {
+    if (!chartEl.value || chartEl.value.offsetWidth < 10) return
+    requestAnimationFrame(render)
+  })
+  ro.observe(chartEl.value)
   render()
 })
-onBeforeUnmount(() => { try { chart && chart.dispose() } catch {} })
+onBeforeUnmount(() => {
+  try { ro && ro.disconnect() } catch {}
+  try { chart && chart.dispose() } catch {}
+})
 </script>
 
 <style scoped>
