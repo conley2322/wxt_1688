@@ -18,7 +18,39 @@ const searchText = ref('')
 const chatSuppliers = ref([])
 const chatMessages = ref([])
 const chatLoading = ref(false)
-const rightTab = ref('note')   // note | goods | chat
+const rightTab = ref('note')   // note | goods | chat（顺序可拖拽，见 tabOrder）
+// 右栏子页签：顺序可拖拽（持久化 imSourceTabsOrder），初始页 = 第一位
+const RIGHT_TABS = [
+  { key: 'note', label: '备注' },
+  { key: 'goods', label: '看过哪些商品' },
+  { key: 'chat', label: '聊天记录' },
+]
+const tabOrder = ref(RIGHT_TABS.map(t => t.key))
+const tabItems = computed(() => tabOrder.value.map(k => RIGHT_TABS.find(t => t.key === k)))
+let dragTab = null
+function onTabDragStart(k, e) {
+  dragTab = k
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+function onTabDrop(k) {
+  if (!dragTab || dragTab === k) { dragTab = null; return }
+  const arr = [...tabOrder.value]
+  arr.splice(arr.indexOf(dragTab), 1)
+  arr.splice(arr.indexOf(k), 0, dragTab)
+  tabOrder.value = arr
+  browser.storage.local.set({ imSourceTabsOrder: arr }).catch(() => {})
+  dragTab = null
+}
+async function loadTabOrder() {
+  try {
+    const { imSourceTabsOrder } = await browser.storage.local.get('imSourceTabsOrder')
+    if (Array.isArray(imSourceTabsOrder)) {
+      const valid = imSourceTabsOrder.filter(k => RIGHT_TABS.some(t => t.key === k))
+      for (const t of RIGHT_TABS) if (!valid.includes(t.key)) valid.push(t.key)
+      tabOrder.value = valid
+    }
+  } catch {}
+}
 
 // 当前选中的供应商
 const currentName = ref('')
@@ -96,7 +128,8 @@ const currentProduct = ref(null)
 const detail = ref(null)
 const detailLoading = ref(false)
 
-onMounted(() => {
+onMounted(async () => {
+  await loadTabOrder()
   load()
   // 每 60 秒自动刷新（聊天实时入库后排序保持最新）
   setInterval(load, 60000)
@@ -137,8 +170,8 @@ watch(searchText, () => {
 function selectSupplier(name) {
   currentName.value = name
   const entry = mergedEntries.value.find(e => e.name === name)
-  // 默认落在「备注」页（与客服页/详情页互通的同一份备注）；聊天-only 的落聊天页
-  rightTab.value = entry?.group ? 'note' : 'chat'
+  // 默认页签跟随拖拽后的第一位
+  rightTab.value = tabOrder.value[0] || 'note'
   loadMessages(name)
   loadSupplierStats(entry?.group ? name : '')
 }
@@ -322,12 +355,21 @@ async function deleteSupplier(g) {
           </div>
         </header>
 
-        <!-- 右栏子页签 -->
+        <!-- 右栏子页签（可拖拽排序，顺序持久化） -->
         <div class="right-tabs">
-          <span class="r-tab" :class="{ on: rightTab === 'note' }" @click="rightTab = 'note'">备注</span>
-          <span class="r-tab" :class="{ on: rightTab === 'goods' }" @click="rightTab = 'goods'">看过哪些商品</span>
-          <span class="r-tab" :class="{ on: rightTab === 'chat' }" @click="rightTab = 'chat'">
-            聊天记录<template v-if="currentChatSupplier">（{{ currentChatSupplier.count }}）</template>
+          <span
+            v-for="t in tabItems"
+            :key="t.key"
+            class="r-tab"
+            :class="{ on: rightTab === t.key }"
+            draggable="true"
+            @dragstart="onTabDragStart(t.key, $event)"
+            @dragover.prevent
+            @drop="onTabDrop(t.key)"
+            @click="rightTab = t.key"
+            :title="t.label + '（可拖拽排序）'"
+          >
+            {{ t.label }}<template v-if="t.key === 'chat' && currentChatSupplier">（{{ currentChatSupplier.count }}）</template>
           </span>
         </div>
 
@@ -650,6 +692,7 @@ async function deleteSupplier(g) {
   padding: 6px 12px;
   border-radius: 6px 6px 0 0;
   border-bottom: 2px solid transparent;
+  user-select: none;
 }
 .r-tab:hover { color: #c9975c; }
 .r-tab.on {

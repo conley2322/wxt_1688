@@ -45,6 +45,8 @@ function onNavDrop(k) {
   arr.splice(arr.indexOf(k), 0, dragKey)
   navOrder.value = arr
   browser.storage.local.set({ imNavOrder: arr }).catch(() => {})
+  // 拖成第一位的那页立即成为默认渲染页
+  if (arr[0] === k) activePage.value = k
   dragKey = null
 }
 async function loadNavOrder() {
@@ -56,6 +58,8 @@ async function loadNavOrder() {
       navOrder.value = valid
     }
   } catch {}
+  // 初始渲染跟随拖拽后的第一位（而不是写死的备注）
+  activePage.value = navOrder.value[0] || 'note'
 }
 const supplierName = ref('')
 const resolveSource = ref('')   // binding | detail | offer | archive | header-name | ''
