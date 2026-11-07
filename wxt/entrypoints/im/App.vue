@@ -12,6 +12,7 @@ import OthersComments from '@/entrypoints/win/components/OthersComments.vue'
 import HsTrendChart from '@/components/HsTrendChart.vue'
 import HsHourlyChart from '@/components/HsHourlyChart.vue'
 import HsHeatmap from '@/components/HsHeatmap.vue'
+import { groupFactoryInfo, fmtProfileTime } from '@/utils/factoryInfo.js'
 import { getImDoc, onImShow, onImDocChange, onChatUpdated, extractHeaderName, extractRenderedArchive, insertIntoChatInput, readNativeArchive, setResolvedSupplier } from './imdom.js'
 
 // ── URL 参数：本面板由外层页面 content script 挂载，location 为外层（同参）；
@@ -208,6 +209,24 @@ async function loadSupplierStats(name) {
   } catch {}
 }
 
+// ── 已保存的供应商档案（旺旺「档案」落库内容）──
+// 实时读取只在本会话首次切到时发生；已存档案保证任何会话、任何时候都能看到工厂信息
+const supplierProfile = ref(null)
+async function loadSupplierProfile(name) {
+  supplierProfile.value = null
+  if (!name) return
+  try {
+    const res = await api(`/api/v1/suppliers/profile?name=${encodeURIComponent(name)}`)
+    if (res.code === 200) supplierProfile.value = res.data || null
+  } catch {}
+}
+// 实时读到的档案优先（最新），否则用本地已存档案
+const profileInfo = computed(() => archiveInfo.value?.info || supplierProfile.value?.archive_info || null)
+const profileYear = computed(() => archiveInfo.value?.year || supplierProfile.value?.year || '')
+const profileLoginIds = computed(() => supplierProfile.value?.loginIds || [])
+const profileUpdatedAt = computed(() => supplierProfile.value?.profile_updated_at || '')
+const infoGroups = computed(() => groupFactoryInfo(profileInfo.value))
+
 function fmtTs(ts) {
   if (!ts) return ''
   const d = new Date(ts)
@@ -250,6 +269,7 @@ async function checkNoteContent() {
 
 async function refreshAll() {
   await resolveSupplier()
+  await loadSupplierProfile(supplierName.value)
   await loadProducts(supplierName.value)
   await loadSupplierStats(supplierName.value)
   await loadChat()
@@ -474,13 +494,18 @@ watch(supplierName, (name) => loadProducts(name))
           <div class="page-row-title">供应商信息 <span class="sec-tip">（来自旺旺「档案」，自动保存）</span></div>
           <template v-if="supplierName">
             <div class="info-row"><span class="info-key">公司名称</span><span class="info-val strong">{{ supplierName }}</span></div>
-            <div v-if="archiveInfo?.year" class="info-row"><span class="info-key">年限</span><span class="info-val">{{ archiveInfo.year }}</span></div>
-            <template v-if="archiveInfo?.info">
-              <div v-for="(v, k) in archiveInfo.info" :key="k" class="info-row">
-                <span class="info-key">{{ k }}</span><span class="info-val">{{ v }}</span>
+            <div v-if="profileYear" class="info-row"><span class="info-key">年限</span><span class="info-val">{{ profileYear }}</span></div>
+            <div v-if="profileLoginIds.length" class="info-row"><span class="info-key">登录 ID</span><span class="info-val">{{ profileLoginIds.join(' / ') }}</span></div>
+            <template v-if="infoGroups.length">
+              <div v-for="g in infoGroups" :key="g.key" class="info-group">
+                <div class="info-group-title">{{ g.label }}</div>
+                <div v-for="r in g.rows" :key="r.key" class="info-row">
+                  <span class="info-key">{{ r.key }}</span><span class="info-val" :title="r.value">{{ r.value }}</span>
+                </div>
               </div>
             </template>
-            <div v-if="!archiveInfo" class="empty-tip">档案信息待读取：切到该会话点一次旺旺「档案」Tab 后自动保存</div>
+            <div v-else class="empty-tip">档案信息待读取：切到该会话点一次旺旺「档案」Tab 后自动保存</div>
+            <div v-if="profileUpdatedAt" class="info-updated">档案更新于 {{ fmtProfileTime(profileUpdatedAt) }}</div>
           </template>
           <div v-else class="empty-tip">未识别供应商，无法读取档案</div>
         </div>
@@ -817,6 +842,15 @@ watch(supplierName, (name) => loadProducts(name))
 .info-key { width: 70px; flex-shrink: 0; color: #999; }
 .info-val { color: #444; word-break: break-all; }
 .info-val.strong { color: #ff5b00; font-weight: 600; }
+.info-group { margin-top: 8px; }
+.info-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #c9975c;
+  padding: 3px 0 2px;
+  border-top: 1px dashed #ffeede;
+}
+.info-updated { margin-top: 6px; font-size: 11px; color: #bbb; }
 
 /* 数据概览 */
 .stat-cards {

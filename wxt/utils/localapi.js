@@ -3,6 +3,7 @@
 // 返回结构与原后端一致（{ code, data, total... }），页面代码无需大改。
 
 import { db, uid, getProfile, saveProfile, storageInfo, getQuotaMB, setQuotaMB, cleanupIfNeeded, exportData, importData, clearStore, clearProducts, pruneStore, STORES } from './localdb.js'
+import { stripHtml, joinSearch, countFactoryFields, matchSearch } from './factoryInfo.js'
 
 const DAY = 86400000
 
@@ -349,6 +350,8 @@ async function route(path, method, body, query) {
     for (const p of products) if (p.supplier_name && viewedIds.has(p.offer_id)) names.add(p.supplier_name)
     for (const s of suppliersTable) names.add(s.name)
     for (const name of Object.keys(supplierCommentMap)) names.add(name)
+    // 供应商档案（旺旺「档案」落库）：工厂信息与搜索都取自这里
+    const supplierByName = new Map(suppliersTable.map(s => [s.name, s]))
 
     let groups = [...names].filter(Boolean).map(name => {
       const supCmts = (supplierCommentMap[name] || [])
@@ -372,12 +375,38 @@ async function route(path, method, body, query) {
       // 组内：有笔记的在前，再按最近浏览降序
       prods.sort((a, b) => Number(b.comment_count > 0) - Number(a.comment_count > 0)
         || (b.last_viewed_at || 0) - (a.last_viewed_at || 0))
+      const sup = supplierByName.get(name) || null
+      const archiveInfo = sup?.archive_info || null
+      // 搜索文本：供应商名 + 登录 ID + 年限 + 工厂信息全部字段值
+      //           + 工厂备注（供应商评论）+ 商品标题 + 商品备注（商品评论）
+      // 页面按 search_blob 做本地过滤，一处覆盖三类来源，且不区分大小写
+      const blobParts = [
+        name,
+        ...(sup?.loginIds || []),
+        sup?.year || '',
+        ...Object.values(archiveInfo || {}),
+      ]
+      for (const c of supCmts) blobParts.push(stripHtml(c.text).slice(0, 1000))
+      for (const p of prods) {
+        blobParts.push(p.title || '')
+        for (const c of (productCommentMap[p.offer_id] || [])) {
+          blobParts.push(stripHtml(c.text).slice(0, 1000))
+        }
+      }
       return {
         supplier_name: name,
         comment_count: supCmts.length,
         supplier_comments: supCmts,
         products: prods,
         product_count: prods.length,
+        archive: sup ? {
+          year: sup.year || '',
+          info: archiveInfo,
+          loginIds: sup.loginIds || [],
+          profile_updated_at: sup.profile_updated_at || null,
+        } : null,
+        field_count: countFactoryFields(archiveInfo),
+        search_blob: joinSearch(blobParts),
         last_activity: Math.max(
           ...prods.map(p => p.last_viewed_at || 0),
           ...supCmts.map(c => new Date(c.updated_at || c.created_at).getTime()),
@@ -389,12 +418,9 @@ async function route(path, method, body, query) {
     // 组排序：有笔记的在前，再按最近活动降序
     groups.sort((a, b) => Number(groupHasNotes(b)) - Number(groupHasNotes(a)) || b.last_activity - a.last_activity)
 
-    // 搜索：供应商名或商品标题
+    // 搜索：供应商名 / 工厂信息 / 工厂备注 / 商品标题 / 商品备注（统一走 search_blob）
     if (query.search) {
-      const kw = query.search.toLowerCase()
-      groups = groups.filter(g =>
-        g.supplier_name.toLowerCase().includes(kw)
-        || g.products.some(p => p.title?.toLowerCase().includes(kw)))
+      groups = groups.filter(g => matchSearch(g.search_blob, query.search))
     }
 
     const stats = {
@@ -718,6 +744,23 @@ async function route(path, method, body, query) {
     const hit = list.find(s => (s.loginIds || []).includes(loginId))
     return ok(hit ? { name: hit.name } : null)
   }
+  // GET /api/v1/suppliers/profile?name=xx — 读取已保存的供应商档案（客服页信息页 / 后台工厂信息页共用）
+  // 档案由客服页自动读取旺旺「档案」Tab 后落库，这里只做读取，不触发抓取
+  if (path === '/api/v1/suppliers/profile' && method === 'GET') {
+    const name = String(query.name || '').trim()
+    if (!name) return ok(null)
+    const s = await db.get('suppliers', name)
+    if (!s) return ok(null)
+    return ok({
+      name: s.name,
+      year: s.year || '',
+      archive_info: s.archive_info || null,
+      loginIds: s.loginIds || [],
+      profile_updated_at: s.profile_updated_at || null,
+      field_count: countFactoryFields(s.archive_info),
+    })
+  }
+
   // POST /api/v1/suppliers/profile { login_id, name, year?, info?, remove_loginid? }
   // 旺旺客服「档案」Tab 里的真实店铺信息落库（loginId 绑定 + 基础信息）
   // remove_loginid=true 时从其他供应商的 loginIds 里摘除该 login_id（清理历史污染映射）
@@ -1071,6 +1114,16 @@ function hasCommentContent(html) {
 
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
+  {
+    id: 'builtin-1.2.0', version: '1.2.0', title: '供应商工厂信息：后台新增页签 + 全字段搜索筛选', status: 'published',
+    created_at: '2026-11-07T14:20:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>【新增了什么】管理后台「我的货源」右栏新增「工厂信息」页签：把旺旺「档案」里自动保存的工厂信息按 基础信息 / 工厂实力 / 服务指标 分组展示（经营模式、交易方式、成立日期、主营信息、厂房面积、员工人数、生产档期、加工定制、认证信息、货描相符、响应速度、发货速度、回头率…），并显示登录 ID 与档案更新时间</li>'
+      + '<li>【新增了什么】客服页「信息」页同样按上述分组展示，且优先读取本地已保存的档案——不必每次切会话都重新点一遍原生「档案」Tab</li>'
+      + '<li>【新增了什么】搜索范围扩展：供应商名、登录 ID、工厂信息全部字段、工厂备注、商品标题、商品备注，一处输入全覆盖</li>'
+      + '<li>【新增了什么】左栏新增筛选：经营模式、交易方式、认证信息、厂房面积档、员工人数档、有无工厂信息，可多选叠加，选项由当前数据自动生成</li>'
+      + '</ul>',
+  },
   {
     id: 'builtin-1.1.1', version: '1.1.1', title: '修复客服页信息页图表宽度异常', status: 'published',
     created_at: '2026-11-07T20:00:00.000Z', created_by: 'Conley',

@@ -8,11 +8,106 @@ import OthersComments from '@/entrypoints/win/components/OthersComments.vue'
 import HsTrendChart from '@/components/HsTrendChart.vue'
 import HsHourlyChart from '@/components/HsHourlyChart.vue'
 import HsHeatmap from '@/components/HsHeatmap.vue'
+import {
+  groupFactoryInfo, areaBucket, employeeBucket,
+  AREA_BUCKETS, EMP_BUCKETS, fmtProfileTime, matchSearch,
+} from '@/utils/factoryInfo.js'
 
 const groups = ref([])
 const stats = ref({ total_suppliers: 0, suppliers_with_notes: 0, total_products: 0, products_with_notes: 0, total_views: 0, total_appears: 0 })
 const loading = ref(false)
 const searchText = ref('')
+
+// ── 工厂信息筛选（选项由当前数据自动生成，多选叠加）──
+const filterOpen = ref(false)
+const activeFilters = ref({})   // { [facetKey]: [value] }
+const FIELD_FACETS = [
+  { key: 'model', label: '经营模式', field: '经营模式' },
+  { key: 'trade', label: '交易方式', field: '交易方式' },
+  { key: 'cert', label: '认证信息', field: '认证信息' },
+]
+const facetDefs = computed(() => {
+  const defs = []
+  for (const d of FIELD_FACETS) {
+    const counter = new Map()
+    for (const g of groups.value) {
+      const v = g.archive?.info?.[d.field]
+      if (v) counter.set(v, (counter.get(v) || 0) + 1)
+    }
+    if (counter.size) {
+      defs.push({
+        ...d,
+        options: [...counter.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([value, count]) => ({ value, label: value, count })),
+      })
+    }
+  }
+  const bucketFacet = (key, label, buckets, fn, field) => {
+    const counter = new Map()
+    for (const g of groups.value) {
+      const b = fn(g.archive?.info?.[field])
+      if (b) counter.set(b, (counter.get(b) || 0) + 1)
+    }
+    if (!counter.size) return
+    defs.push({
+      key, label, bucket: key, field,
+      options: buckets.filter(b => counter.has(b.value))
+        .map(b => ({ value: b.value, label: b.label, count: counter.get(b.value) })),
+    })
+  }
+  bucketFacet('area', '厂房面积', AREA_BUCKETS, areaBucket, '厂房面积')
+  bucketFacet('emp', '员工人数', EMP_BUCKETS, employeeBucket, '员工人数')
+  const withFactory = groups.value.filter(g => (g.field_count || 0) > 0).length
+  const noFactory = groups.value.length - withFactory
+  if (withFactory && noFactory) {
+    defs.push({
+      key: 'archive', label: '资料状态',
+      options: [
+        { value: 'has', label: '有工厂信息', count: withFactory },
+        { value: 'none', label: '无工厂信息', count: noFactory },
+      ],
+    })
+  }
+  return defs
+})
+const activeFilterCount = computed(() =>
+  Object.values(activeFilters.value).reduce((n, arr) => n + (arr?.length || 0), 0))
+function setFacet(key, values) {
+  activeFilters.value = { ...activeFilters.value, [key]: values }
+}
+function clearFacet(key) {
+  const next = { ...activeFilters.value }
+  delete next[key]
+  activeFilters.value = next
+}
+function clearAllFilters() { activeFilters.value = {} }
+
+function matchFacet(g, def, selected) {
+  if (!selected.length) return true
+  if (def.key === 'archive') {
+    const has = (g.field_count || 0) > 0
+    return selected.includes(has ? 'has' : 'none')
+  }
+  if (def.bucket === 'area') return selected.includes(areaBucket(g.archive?.info?.['厂房面积']))
+  if (def.bucket === 'emp') return selected.includes(employeeBucket(g.archive?.info?.['员工人数']))
+  const v = g.archive?.info?.[def.field] || ''
+  return selected.includes(v)
+}
+
+// 关键词 + 工厂信息筛选后的供应商分组（搜索文本由接口预先拼好：工厂信息 + 工厂备注 + 商品备注）
+const filteredGroups = computed(() => {
+  const kw = searchText.value.trim()
+  const defs = facetDefs.value
+  return groups.value.filter(g => {
+    if (kw && !matchSearch(g.search_blob, kw)) return false
+    for (const d of defs) {
+      const selected = activeFilters.value[d.key] || []
+      if (selected.length && !matchFacet(g, d, selected)) return false
+    }
+    return true
+  })
+})
 
 // ── 聊天记录（与货源合并展示）──
 const chatSuppliers = ref([])
@@ -22,6 +117,7 @@ const rightTab = ref('note')   // note | goods | chat（顺序可拖拽，见 ta
 // 右栏子页签：顺序可拖拽（持久化 imSourceTabsOrder），初始页 = 第一位
 const RIGHT_TABS = [
   { key: 'note', label: '备注' },
+  { key: 'factory', label: '工厂信息' },
   { key: 'goods', label: '看过哪些商品' },
   { key: 'chat', label: '聊天记录' },
 ]
@@ -45,9 +141,20 @@ async function loadTabOrder() {
   try {
     const { imSourceTabsOrder } = await browser.storage.local.get('imSourceTabsOrder')
     if (Array.isArray(imSourceTabsOrder)) {
-      const valid = imSourceTabsOrder.filter(k => RIGHT_TABS.some(t => t.key === k))
-      for (const t of RIGHT_TABS) if (!valid.includes(t.key)) valid.push(t.key)
-      tabOrder.value = valid
+      const saved = imSourceTabsOrder.filter(k => RIGHT_TABS.some(t => t.key === k))
+      // 新增页签按默认位置插入（不粗暴追加到末尾，老用户顺序也不乱）
+      const out = []
+      for (const t of RIGHT_TABS) {
+        if (saved.includes(t.key)) { out.push(t.key); continue }
+        const idx = RIGHT_TABS.findIndex(x => x.key === t.key)
+        let insertAt = out.length
+        for (let i = idx - 1; i >= 0; i--) {
+          const pos = out.indexOf(RIGHT_TABS[i].key)
+          if (pos >= 0) { insertAt = pos + 1; break }
+        }
+        out.splice(insertAt, 0, t.key)
+      }
+      tabOrder.value = out
     }
   } catch {}
 }
@@ -60,13 +167,17 @@ const currentGroup = computed(() => groups.value.find(g => g.supplier_name === c
 const pinnedSuppliers = ref([])
 const sortMode = ref('time')   // time = 最新活动在前 | name = 名称排序
 const mergedEntries = computed(() => {
+  const kw = searchText.value.trim()
   const map = new Map()
-  for (const g of groups.value) map.set(g.supplier_name, { name: g.supplier_name, group: g, chat: null })
+  for (const g of filteredGroups.value) map.set(g.supplier_name, { name: g.supplier_name, group: g, chat: null })
   for (const c of chatSuppliers.value) {
     const key = c.supplier_name || c.display_name || c.login_id
     if (!key) continue
     if (map.has(key)) map.get(key).chat = c
-    else map.set(key, { name: key, group: null, chat: c })
+    // 仅聊天记录的供应商（本地库没有货源分组）：同样受搜索词约束
+    else if (matchSearch(`${key} ${c.display_name || ''} ${c.login_id || ''}`, kw)) {
+      map.set(key, { name: key, group: null, chat: c })
+    }
   }
   const list = [...map.values()]
   for (const e of list) {
@@ -111,6 +222,23 @@ async function loadSupplierStats(name) {
     console.error('[MySources] 供应商数据加载失败', e)
   }
 }
+// ── 供应商工厂信息（旺旺「档案」落库内容）──
+const supProfile = ref(null)
+async function loadSupplierProfile(name) {
+  supProfile.value = null
+  if (!name) return
+  try {
+    const res = await api(`/api/v1/suppliers/profile?name=${encodeURIComponent(name)}`)
+    if (res.code === 200) supProfile.value = res.data || null
+  } catch (e) {
+    console.error('[MySources] 供应商档案加载失败', e)
+  }
+}
+// 档案来源：优先本地已存档案接口，退回分组接口随带的 archive
+const factoryMeta = computed(() => supProfile.value || currentGroup.value?.archive || null)
+const factoryInfo = computed(() => factoryMeta.value?.archive_info || factoryMeta.value?.info || null)
+const factoryRows = computed(() => groupFactoryInfo(factoryInfo.value))
+
 function fmtTs(ts) {
   if (!ts) return ''
   const d = new Date(ts)
@@ -138,9 +266,9 @@ onMounted(async () => {
 async function load() {
   loading.value = true
   try {
-    const qs = searchText.value.trim() ? `?search=${encodeURIComponent(searchText.value.trim())}` : ''
+    // 搜索与筛选全在本地完成（数据一次取全，选项由数据自动生成，输入即时生效）
     const [res, chatRes] = await Promise.all([
-      api(`/api/v1/products/grouped${qs}`, 'GET'),
+      api('/api/v1/products/grouped', 'GET'),
       api('/api/v1/chat/conversations', 'GET'),
     ])
     if (res.code === 200) {
@@ -156,6 +284,8 @@ async function load() {
       // 初始页签跟随拖拽后的第一位（仅在选择变化时设置，不干扰自动刷新中的当前页签）
       rightTab.value = tabOrder.value[0] || 'note'
       loadMessages(currentName.value)
+      loadSupplierProfile(currentName.value)
+      loadSupplierStats(currentName.value)
     }
   } catch (e) {
     console.error('[MySources] 加载失败:', e)
@@ -164,10 +294,15 @@ async function load() {
   }
 }
 
-let searchTimer = null
-watch(searchText, () => {
-  clearTimeout(searchTimer)
-  searchTimer = setTimeout(load, 300)
+// 搜索/筛选把当前供应商过滤掉了 → 自动切到过滤结果里的第一个（不重置右栏页签）
+watch(mergedEntries, (list) => {
+  if (!list.length) return
+  if (list.some(e => e.name === currentName.value)) return
+  const first = list[0]
+  currentName.value = first.name
+  loadMessages(first.name)
+  loadSupplierProfile(first.name)
+  loadSupplierStats(first.group ? first.name : '')
 })
 
 function selectSupplier(name) {
@@ -176,6 +311,7 @@ function selectSupplier(name) {
   // 默认页签跟随拖拽后的第一位
   rightTab.value = tabOrder.value[0] || 'note'
   loadMessages(name)
+  loadSupplierProfile(name)
   loadSupplierStats(entry?.group ? name : '')
 }
 
@@ -306,11 +442,47 @@ async function deleteSupplier(g) {
     <!-- 左栏：供应商列表 -->
     <aside class="supplier-pane">
       <div class="pane-search">
-        <el-input v-model="searchText" placeholder="搜索供应商" clearable size="small" :prefix-icon="Search" />
+        <el-input v-model="searchText" placeholder="搜索供应商 / 工厂信息 / 备注" clearable size="small" :prefix-icon="Search" />
         <div class="sort-toggle">
           <span class="sort-label">排序：</span>
           <span class="sort-opt" :class="{ on: sortMode === 'time' }" @click="setSortMode('time')">最新</span>
           <span class="sort-opt" :class="{ on: sortMode === 'name' }" @click="setSortMode('name')">名称</span>
+        </div>
+        <!-- 工厂信息筛选：选项由数据自动生成，多选叠加 -->
+        <div class="filter-bar">
+          <div class="filter-head" @click="filterOpen = !filterOpen">
+            <span class="filter-title">
+              筛选<span v-if="activeFilterCount" class="filter-count">{{ activeFilterCount }}</span>
+            </span>
+            <span class="filter-toggle">{{ filterOpen ? '收起 ▴' : '展开 ▾' }}</span>
+          </div>
+          <div v-show="filterOpen" class="filter-body">
+            <div v-for="d in facetDefs" :key="d.key" class="filter-row">
+              <div class="filter-label">
+                {{ d.label }}
+                <span v-if="(activeFilters[d.key] || []).length" class="filter-clear" @click.stop="clearFacet(d.key)">清空</span>
+              </div>
+              <el-select
+                :model-value="activeFilters[d.key] || []"
+                multiple
+                collapse-tags
+                collapse-tags-tooltip
+                size="small"
+                placeholder="全部"
+                style="width: 100%"
+                @update:model-value="v => setFacet(d.key, v)"
+              >
+                <el-option
+                  v-for="o in d.options"
+                  :key="o.value"
+                  :label="`${o.label}（${o.count}）`"
+                  :value="o.value"
+                />
+              </el-select>
+            </div>
+            <div v-if="!facetDefs.length" class="filter-empty">暂无可筛选的工厂信息</div>
+            <el-button v-if="activeFilterCount" size="small" text class="filter-reset" @click="clearAllFilters">清空全部筛选</el-button>
+          </div>
         </div>
       </div>
       <div class="supplier-list">
@@ -336,7 +508,9 @@ async function deleteSupplier(g) {
             @click.stop="togglePin(e.name)"
           >📌</span>
         </div>
-        <div v-if="mergedEntries.length === 0" class="pane-empty">暂无供应商</div>
+        <div v-if="mergedEntries.length === 0" class="pane-empty">
+          {{ (searchText || activeFilterCount) ? '没有匹配的供应商，试试放宽搜索或筛选条件' : '暂无供应商' }}
+        </div>
       </div>
     </aside>
 
@@ -383,6 +557,37 @@ async function deleteSupplier(g) {
           </div>
           <div class="others-box">
             <OthersComments :key="'admin-others-' + currentEntry.name" kind="supplier" :target="currentEntry.name" />
+          </div>
+        </div>
+
+        <!-- 工厂信息页：旺旺「档案」自动保存的内容，按 基础/工厂实力/服务指标 分组 -->
+        <div v-if="rightTab === 'factory'" class="factory-panel">
+          <div class="f-head">
+            <div class="f-title">
+              工厂信息
+              <span class="f-sub">（来自旺旺「档案」，自动保存）</span>
+            </div>
+            <div class="f-meta">
+              <span v-if="factoryMeta?.year">年限 {{ factoryMeta.year }}</span>
+              <span v-if="factoryMeta?.loginIds && factoryMeta.loginIds.length">登录 ID {{ factoryMeta.loginIds.join(' / ') }}</span>
+              <span v-if="factoryMeta?.profile_updated_at">更新于 {{ fmtProfileTime(factoryMeta.profile_updated_at) }}</span>
+            </div>
+          </div>
+
+          <template v-if="factoryRows.length">
+            <div v-for="g in factoryRows" :key="g.key" class="f-group">
+              <div class="f-group-title">{{ g.label }}</div>
+              <div class="f-grid">
+                <div v-for="r in g.rows" :key="r.key" class="f-item">
+                  <span class="f-key">{{ r.key }}</span>
+                  <span class="f-val" :title="r.value">{{ r.value }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+          <div v-else class="pane-empty">
+            暂无工厂信息。在客服页切到该供应商的会话，插件会自动读取旺旺「档案」并保存；
+            读取时需点一次原生「档案」Tab，之后这里和客服页「信息」页都会显示。
           </div>
         </div>
 
@@ -645,6 +850,59 @@ async function deleteSupplier(g) {
 .supplier-item.on .s-name { color: #c9975c; }
 .s-meta { font-size: 11px; color: #a8abb2; margin-top: 2px; }
 .pane-empty { text-align: center; font-size: 12px; color: #bbb; padding: 30px 0; }
+
+/* 工厂信息筛选面板 */
+.filter-bar { margin-top: 8px; border-top: 1px dashed #f0e6d8; padding-top: 6px; }
+.filter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+.filter-title { font-size: 12px; font-weight: 600; color: #606266; }
+.filter-count {
+  display: inline-block;
+  margin-left: 4px;
+  background: #c9975c;
+  color: #fff;
+  border-radius: 9px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 15px;
+}
+.filter-toggle { font-size: 11px; color: #a8abb2; }
+.filter-body { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.filter-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #909399;
+  margin-bottom: 2px;
+}
+.filter-clear { color: #c9975c; cursor: pointer; }
+.filter-clear:hover { text-decoration: underline; }
+.filter-empty { font-size: 11px; color: #bbb; padding: 2px 0; }
+.filter-reset { align-self: flex-start; font-size: 11px; padding: 0; height: 20px; }
+
+/* 工厂信息页 */
+.factory-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px; }
+.f-head { border-bottom: 1px solid #f2f3f5; padding-bottom: 8px; margin-bottom: 10px; }
+.f-title { font-size: 14px; font-weight: 600; color: #303133; }
+.f-sub { font-size: 11px; font-weight: 400; color: #a8abb2; }
+.f-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; font-size: 11px; color: #909399; }
+.f-group {
+  border: 1px solid #f0e6d8;
+  border-radius: 8px;
+  background: #fffdf9;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.f-group-title { font-size: 12px; font-weight: 600; color: #c9975c; margin-bottom: 8px; }
+.f-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.f-item { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
+.f-key { flex-shrink: 0; width: 64px; color: #a08969; }
+.f-val { color: #303133; word-break: break-all; }
 
 /* 右栏 */
 .product-pane {
