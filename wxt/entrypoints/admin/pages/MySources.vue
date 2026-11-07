@@ -3,15 +3,88 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Delete, ArrowRight, TopRight } from '@element-plus/icons-vue'
 import { api } from '../utils/useApi.js'
+import CommentInput from '@/entrypoints/win/components/CommentInput.vue'
+import OthersComments from '@/entrypoints/win/components/OthersComments.vue'
+import HsTrendChart from '@/components/HsTrendChart.vue'
+import HsHourlyChart from '@/components/HsHourlyChart.vue'
+import HsHeatmap from '@/components/HsHeatmap.vue'
 
 const groups = ref([])
 const stats = ref({ total_suppliers: 0, suppliers_with_notes: 0, total_products: 0, products_with_notes: 0, total_views: 0, total_appears: 0 })
 const loading = ref(false)
 const searchText = ref('')
 
+// ── 聊天记录（与货源合并展示）──
+const chatSuppliers = ref([])
+const chatMessages = ref([])
+const chatLoading = ref(false)
+const rightTab = ref('note')   // note | goods | chat
+
 // 当前选中的供应商
 const currentName = ref('')
 const currentGroup = computed(() => groups.value.find(g => g.supplier_name === currentName.value) || null)
+// 合并条目：本地库供应商 ∪ 聊天记录供应商（按名称对齐，聊天-only 的也能显示）
+// 排序：置顶优先；其余按用户选择的模式（最新活动 / 名称）排列。有笔记不再自动置顶。
+const pinnedSuppliers = ref([])
+const sortMode = ref('time')   // time = 最新活动在前 | name = 名称排序
+const mergedEntries = computed(() => {
+  const map = new Map()
+  for (const g of groups.value) map.set(g.supplier_name, { name: g.supplier_name, group: g, chat: null })
+  for (const c of chatSuppliers.value) {
+    const key = c.supplier_name || c.display_name || c.login_id
+    if (!key) continue
+    if (map.has(key)) map.get(key).chat = c
+    else map.set(key, { name: key, group: null, chat: c })
+  }
+  const list = [...map.values()]
+  for (const e of list) {
+    e.lastActivity = Math.max(e.group?.last_activity || 0, e.chat?.last_ts || 0)
+    e.pinned = pinnedSuppliers.value.includes(e.name)
+  }
+  return list.sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+    if (sortMode.value === 'name') return a.name.localeCompare(b.name, 'zh-CN')
+    return b.lastActivity - a.lastActivity
+  })
+})
+
+async function loadPinned() {
+  const { imPinnedSuppliers, imSupplierSortMode } = await browser.storage.local.get(['imPinnedSuppliers', 'imSupplierSortMode'])
+  pinnedSuppliers.value = Array.isArray(imPinnedSuppliers) ? imPinnedSuppliers : []
+  if (imSupplierSortMode === 'name' || imSupplierSortMode === 'time') sortMode.value = imSupplierSortMode
+}
+async function togglePin(name) {
+  const list = new Set(pinnedSuppliers.value)
+  if (list.has(name)) list.delete(name)
+  else list.add(name)
+  pinnedSuppliers.value = [...list]
+  await browser.storage.local.set({ imPinnedSuppliers: pinnedSuppliers.value })
+}
+function setSortMode(mode) {
+  sortMode.value = mode
+  browser.storage.local.set({ imSupplierSortMode: mode })
+}
+const currentEntry = computed(() => mergedEntries.value.find(e => e.name === currentName.value) || null)
+const currentChatSupplier = computed(() => currentEntry.value?.chat || null)
+
+// ── 供应商聚合数据（数据概览）──
+const supStats = ref(null)
+async function loadSupplierStats(name) {
+  supStats.value = null
+  if (!name) return
+  try {
+    const res = await api(`/api/v1/suppliers/stats?name=${encodeURIComponent(name)}`)
+    if (res.code === 200) supStats.value = res.data
+  } catch (e) {
+    console.error('[MySources] 供应商数据加载失败', e)
+  }
+}
+function fmtTs(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const p = (x) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
 
 // ── 批量管理 ──
 const batchMode = ref(false)
@@ -23,20 +96,30 @@ const currentProduct = ref(null)
 const detail = ref(null)
 const detailLoading = ref(false)
 
-onMounted(load)
+onMounted(() => {
+  load()
+  // 每 60 秒自动刷新（聊天实时入库后排序保持最新）
+  setInterval(load, 60000)
+})
 
 async function load() {
   loading.value = true
   try {
     const qs = searchText.value.trim() ? `?search=${encodeURIComponent(searchText.value.trim())}` : ''
-    const res = await api(`/api/v1/products/grouped${qs}`, 'GET')
+    const [res, chatRes] = await Promise.all([
+      api(`/api/v1/products/grouped${qs}`, 'GET'),
+      api('/api/v1/chat/conversations', 'GET'),
+    ])
     if (res.code === 200) {
       groups.value = res.data
       if (res.stats) stats.value = res.stats
-      // 默认选中第一个供应商（grouped 接口已把有笔记的排最前）
-      if (!currentName.value || !res.data.some(g => g.supplier_name === currentName.value)) {
-        currentName.value = res.data[0]?.supplier_name || ''
-      }
+    }
+    if (chatRes.code === 200) chatSuppliers.value = chatRes.suppliers || []
+    await loadPinned()
+    // 默认选中第一个供应商（grouped 接口已把有笔记的排最前；聊天-only 的也纳入）
+    const names = mergedEntries.value.map(e => e.name)
+    if (!currentName.value || !names.includes(currentName.value)) {
+      currentName.value = names[0] || ''
     }
   } catch (e) {
     console.error('[MySources] 加载失败:', e)
@@ -51,10 +134,45 @@ watch(searchText, () => {
   searchTimer = setTimeout(load, 300)
 })
 
-const hasNotes = g => g.comment_count > 0 || g.products.some(p => p.comment_count > 0)
-
 function selectSupplier(name) {
   currentName.value = name
+  const entry = mergedEntries.value.find(e => e.name === name)
+  // 默认落在「备注」页（与客服页/详情页互通的同一份备注）；聊天-only 的落聊天页
+  rightTab.value = entry?.group ? 'note' : 'chat'
+  loadMessages(name)
+  loadSupplierStats(entry?.group ? name : '')
+}
+
+// ── 聊天记录加载 ──
+async function loadMessages(name) {
+  chatMessages.value = []
+  chatLoading.value = true
+  try {
+    let list = []
+    const res = await api(`/api/v1/chat/messages?supplier_name=${encodeURIComponent(name)}&limit=500`)
+    if (res.code === 200) list = res.data || []
+    // 未识别供应商（记录里 supplier_name 为显示名兜底）按显示名/登录 ID 再捞一遍
+    if (!list.length) {
+      const all = await api('/api/v1/chat/messages?limit=800')
+      if (all.code === 200) list = (all.data || []).filter(m => (m.display_name || m.login_id) === name)
+    }
+    chatMessages.value = list
+  } catch (e) {
+    console.error('[MySources] 聊天记录加载失败:', e)
+  } finally {
+    chatLoading.value = false
+  }
+}
+
+function openChatLink(l) {
+  window.open(l.href || (l.offer_id ? `https://detail.1688.com/offer/${l.offer_id}.html` : ''), '_blank')
+}
+
+function fmtChatBytes(n) {
+  if (!n) return '0 B'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / 1024 / 1024).toFixed(2) + ' MB'
 }
 
 // 商品详情页链接：有 offer_id 即可拼出，不依赖页面采集
@@ -153,52 +271,100 @@ async function deleteSupplier(g) {
     <aside class="supplier-pane">
       <div class="pane-search">
         <el-input v-model="searchText" placeholder="搜索供应商" clearable size="small" :prefix-icon="Search" />
+        <div class="sort-toggle">
+          <span class="sort-label">排序：</span>
+          <span class="sort-opt" :class="{ on: sortMode === 'time' }" @click="setSortMode('time')">最新</span>
+          <span class="sort-opt" :class="{ on: sortMode === 'name' }" @click="setSortMode('name')">名称</span>
+        </div>
       </div>
       <div class="supplier-list">
         <div
-          v-for="g in groups"
-          :key="g.supplier_name"
+          v-for="e in mergedEntries"
+          :key="e.name"
           class="supplier-item"
-          :class="{ on: g.supplier_name === currentName }"
-          @click="selectSupplier(g.supplier_name)"
+          :class="{ on: e.name === currentName }"
+          @click="selectSupplier(e.name)"
         >
-          <span v-if="hasNotes(g)" class="s-pin">📌</span>
+          <span v-if="e.pinned" class="s-pin">📌</span>
           <div class="s-info">
-            <div class="s-name">{{ g.supplier_name }}</div>
+            <div class="s-name">{{ e.name }}</div>
             <div class="s-meta">
-              {{ g.product_count }} 件商品<template v-if="g.comment_count > 0"> · {{ g.comment_count }} 条笔记</template>
+              <template v-if="e.group">{{ e.group.product_count }} 件商品<template v-if="e.group.comment_count > 0"> · {{ e.group.comment_count }} 条笔记</template></template>
+              <template v-if="e.chat">{{ e.group ? ' · ' : '' }}聊天 {{ e.chat.count }} 条<template v-if="e.chat.bytes"> · {{ fmtChatBytes(e.chat.bytes) }}</template></template>
             </div>
           </div>
+          <span
+            class="s-pin-btn"
+            :class="{ on: e.pinned }"
+            :title="e.pinned ? '取消置顶' : '置顶'"
+            @click.stop="togglePin(e.name)"
+          >📌</span>
         </div>
-        <div v-if="groups.length === 0" class="pane-empty">暂无供应商</div>
+        <div v-if="mergedEntries.length === 0" class="pane-empty">暂无供应商</div>
       </div>
     </aside>
 
-    <!-- 右栏：商品行列表 -->
+    <!-- 右栏：供应商内容（商品 / 聊天记录 子页签） -->
     <main class="product-pane">
-      <template v-if="currentGroup">
+      <template v-if="currentEntry">
         <header class="pane-head">
           <div class="head-title">
-            {{ currentGroup.supplier_name }}
-            <span class="head-meta">{{ currentGroup.product_count }} 件商品</span>
+            {{ currentEntry.name }}
+            <span class="head-meta">
+              <template v-if="currentGroup">{{ currentGroup.product_count }} 件商品<template v-if="currentChatSupplier"> · </template></template>
+              <template v-if="currentChatSupplier">聊天 {{ currentChatSupplier.count }} 条 · {{ fmtChatBytes(currentChatSupplier.bytes) }}</template>
+            </span>
           </div>
-          <div class="head-actions">
+          <div class="head-actions" v-if="currentGroup">
             <el-button v-if="!batchMode" size="small" @click="enterBatch">批量管理</el-button>
             <el-button v-else size="small" @click="exitBatch">退出批量</el-button>
             <el-button size="small" type="danger" plain :icon="Delete" @click="deleteSupplier(currentGroup)">删除供应商</el-button>
           </div>
         </header>
 
-        <!-- 供应商笔记 -->
-        <div v-if="currentGroup.supplier_comments.length" class="supplier-note">
-          <div v-for="c in currentGroup.supplier_comments" :key="c.id" class="note-row">
-            <div class="note-text" v-html="c.text"></div>
-            <span class="note-time">{{ fmtDateTime(new Date(c.updated_at || c.created_at).getTime()) }}</span>
+        <!-- 右栏子页签 -->
+        <div class="right-tabs">
+          <span class="r-tab" :class="{ on: rightTab === 'note' }" @click="rightTab = 'note'">备注</span>
+          <span class="r-tab" :class="{ on: rightTab === 'goods' }" @click="rightTab = 'goods'">看过哪些商品</span>
+          <span class="r-tab" :class="{ on: rightTab === 'chat' }" @click="rightTab = 'chat'">
+            聊天记录<template v-if="currentChatSupplier">（{{ currentChatSupplier.count }}）</template>
+          </span>
+        </div>
+
+        <!-- 备注页：与客服页备注面板 / 详情页浮窗互通的同一份备注 -->
+        <div v-if="rightTab === 'note'" class="note-panel">
+          <div class="editor-box">
+            <CommentInput :key="'admin-note-' + currentEntry.name" kind="supplier" :target="currentEntry.name" placeholder="写点关于这个供应商的备注，编辑后自动保存..." />
+          </div>
+          <div class="others-box">
+            <OthersComments :key="'admin-others-' + currentEntry.name" kind="supplier" :target="currentEntry.name" />
           </div>
         </div>
 
-        <!-- 商品列表（一行一个） -->
-        <div class="product-rows">
+        <!-- 商品列表（一行一个）—— v-if：聊天-only 供应商没有 currentGroup，v-show 仍会求值 v-for 导致崩溃 -->
+        <div v-if="rightTab === 'goods' && currentGroup" class="product-rows">
+          <!-- 供应商数据概览（总商品/浏览/出现 + 趋势图 + 浏览时间轴） -->
+          <div class="sup-stats" v-if="supStats">
+            <div class="ss-cards">
+              <div class="ss-card"><span class="ss-num">{{ supStats.totals.product_count }}</span><span class="ss-label">商品</span></div>
+              <div class="ss-card"><span class="ss-num">{{ supStats.totals.view_count }}</span><span class="ss-label">浏览</span></div>
+              <div class="ss-card"><span class="ss-num">{{ supStats.totals.appear_count }}</span><span class="ss-label">出现</span></div>
+            </div>
+            <div class="ss-times" v-if="supStats.last_view_at">
+              首次浏览 {{ fmtTs(supStats.first_view_at) }} · 最近浏览 {{ fmtTs(supStats.last_view_at) }}
+            </div>
+            <HsTrendChart v-if="supStats.daily && supStats.daily.length" :daily="supStats.daily" :height="150" />
+            <div class="ss-tl-title">浏览时段分布</div>
+            <HsHourlyChart v-if="supStats.hourly && supStats.hourly.length" :hourly="supStats.hourly" :height="120" />
+            <div class="ss-tl-title">浏览热力图（星期 × 小时）</div>
+            <HsHeatmap v-if="supStats.heatmap && supStats.heatmap.length" :heatmap="supStats.heatmap" :height="150" />
+            <div class="ss-tl-title">浏览时间轴（最近 20 条）</div>
+            <div v-if="!supStats.timeline || !supStats.timeline.length" class="pane-empty">暂无浏览记录</div>
+            <div v-for="t in (supStats.timeline || []).slice(0, 20)" :key="t.ts + t.offer_id" class="ss-tl-row" @click="openProduct({ offer_id: t.offer_id, title: t.title })">
+              <span class="ss-tl-time">{{ fmtTs(t.ts) }}</span>
+              <span class="ss-tl-title" :title="t.title">{{ t.title || t.offer_id }}</span>
+            </div>
+          </div>
           <div
             v-for="p in currentGroup.products"
             :key="p.offer_id"
@@ -248,6 +414,26 @@ async function deleteSupplier(g) {
             <el-icon v-if="!batchMode" class="row-arrow"><ArrowRight /></el-icon>
           </div>
         </div>
+
+        <!-- 聊天记录页 -->
+        <div v-if="rightTab === 'chat'" class="chat-panel" v-loading="chatLoading">
+          <div v-if="!chatMessages.length" class="pane-empty">暂无聊天记录（客服页会话收发消息后自动保存）</div>
+          <div v-for="m in chatMessages" :key="m.id" class="c-msg" :class="{ self: m.sender === 'me' }">
+            <div class="c-meta">
+              <span class="c-nick">{{ m.sender === 'me' ? '我' : (m.nick || m.display_name || '对方') }}</span>
+              <span class="c-time">{{ m.time }}</span>
+            </div>
+            <div v-if="m.text" class="c-text">{{ m.text }}</div>
+            <div v-if="m.links && m.links.length" class="c-links">
+              <span v-for="(l, i) in m.links" :key="i" class="c-link" :title="l.href" @click="openChatLink(l)">
+                🔗 {{ l.text ? (l.text.length > 30 ? l.text.slice(0, 30) + '…' : l.text) : '打开商品' }} ↗
+              </span>
+            </div>
+            <div v-if="m.images && m.images.length" class="c-imgs">
+              <img v-for="(img, i) in m.images" :key="i" class="c-img" :src="img.src || img.url" loading="lazy" />
+            </div>
+          </div>
+        </div>
       </template>
 
       <!-- 未选中供应商 -->
@@ -288,7 +474,11 @@ async function deleteSupplier(g) {
 
         <!-- 近 30 天每日数据 -->
         <template v-if="detail && viewedDays.length">
-          <h4 class="d-section">近 30 天出现 / 浏览记录</h4>
+          <h4 class="d-section">近 30 天出现 / 浏览趋势</h4>
+          <HsTrendChart :daily="detail.daily" :height="170" />
+          <h4 class="d-section" style="margin-top: 10px">浏览时段分布</h4>
+          <HsHourlyChart v-if="detail.hourly && detail.hourly.length" :hourly="detail.hourly" :height="130" />
+          <h4 class="d-section" style="margin-top: 10px">近 30 天出现 / 浏览记录</h4>
           <div class="d-day-list">
             <div v-for="d in viewedDays" :key="d.date" class="d-day-row">
               <span class="d-day-date">{{ d.date }}</span>
@@ -351,6 +541,28 @@ async function deleteSupplier(g) {
   overflow: hidden;
 }
 .pane-search { padding: 10px; border-bottom: 1px solid #f2f3f5; }
+.sort-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.sort-label { font-size: 11px; color: #a8abb2; }
+.sort-opt {
+  font-size: 11px;
+  color: #909399;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #e4e7ed;
+}
+.sort-opt:hover { color: #c9975c; border-color: #e6c9a0; }
+.sort-opt.on {
+  color: #c9975c;
+  font-weight: 600;
+  border-color: #c9975c;
+  background: #fdf8f3;
+}
 .supplier-list { flex: 1; overflow-y: auto; padding: 6px; }
 .supplier-item {
   display: flex;
@@ -363,6 +575,19 @@ async function deleteSupplier(g) {
 .supplier-item:hover { background: #f7f8fa; }
 .supplier-item.on { background: #fdf4ea; }
 .s-pin { font-size: 12px; flex-shrink: 0; }
+.s-pin-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  filter: grayscale(1);
+  transition: opacity 0.15s;
+}
+.supplier-item:hover .s-pin-btn { opacity: 0.7; }
+.s-pin-btn:hover { opacity: 1; background: #f0f0f0; }
+.s-pin-btn.on { opacity: 1; filter: none; }
 .s-info { min-width: 0; }
 .s-name {
   font-size: 13px;
@@ -410,6 +635,106 @@ async function deleteSupplier(g) {
 .note-text :deep(p) { margin: 0 0 4px; }
 .note-text :deep(ul), .note-text :deep(ol) { margin: 4px 0; padding-left: 18px; }
 .note-time { font-size: 11px; color: #c4b08c; white-space: nowrap; padding-top: 2px; }
+
+/* 右栏子页签 */
+.right-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid #f2f3f5;
+}
+.r-tab {
+  font-size: 13px;
+  color: #909399;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 6px 6px 0 0;
+  border-bottom: 2px solid transparent;
+}
+.r-tab:hover { color: #c9975c; }
+.r-tab.on {
+  color: #c9975c;
+  font-weight: 600;
+  border-bottom-color: #c9975c;
+}
+
+/* 备注页 */
+.note-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px; }
+.editor-box {
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.editor-box :deep(.rich-editor-wrap) { min-height: 150px; }
+.others-box { margin-top: 10px; max-height: 220px; overflow-y: auto; }
+.others-box :deep(.oc-title) { font-size: 12px; color: #909399; margin: 8px 0 6px; }
+.others-box :deep(.oc-item) { border-top: 1px solid #f2f3f5; }
+.others-box :deep(.oc-text) { font-size: 13px; color: #5b4a35; line-height: 1.5; }
+.others-box :deep(.oc-text p) { margin: 0 0 4px; }
+.others-box :deep(.oc-empty) { font-size: 12px; color: #bbb; padding: 6px 0; }
+
+/* 聊天记录页 */
+.chat-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px; }
+.c-msg {
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: #f7f8fa;
+  max-width: 620px;
+}
+.c-msg.self { background: #fdf4ea; margin-left: auto; }
+.c-meta { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+.c-nick { font-size: 11px; font-weight: 600; color: #666; }
+.c-msg.self .c-nick { color: #c9975c; }
+.c-time { font-size: 10px; color: #c4b08c; }
+.c-text { font-size: 13px; color: #303133; line-height: 1.6; word-break: break-all; white-space: pre-wrap; }
+.c-links { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+.c-link { font-size: 12px; color: #409eff; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-link:hover { text-decoration: underline; }
+.c-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.c-img { max-width: 180px; max-height: 140px; border-radius: 6px; border: 1px solid #ebeef5; object-fit: cover; cursor: zoom-in; }
+
+/* 供应商数据概览 */
+.sup-stats {
+  border: 1px solid #f0e6d8;
+  border-radius: 8px;
+  background: #fffdf9;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.ss-cards { display: flex; gap: 8px; margin-bottom: 6px; }
+.ss-card {
+  flex: 1;
+  background: #fff;
+  border: 1px solid #f0e6d8;
+  border-radius: 6px;
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.ss-num { font-size: 16px; font-weight: 700; color: #c9975c; }
+.ss-label { font-size: 10px; color: #b9986f; }
+.ss-times { font-size: 11px; color: #a8abb2; margin-bottom: 6px; }
+.ss-tl-title { font-size: 12px; color: #909399; margin: 8px 0 4px; }
+.ss-tl-row {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px solid #f7f4ef;
+  cursor: pointer;
+  font-size: 12px;
+}
+.ss-tl-row:hover .ss-tl-title { color: #c9975c; }
+.ss-tl-time { flex-shrink: 0; color: #c4b08c; }
+.ss-tl-title {
+  flex: 1;
+  min-width: 0;
+  color: #5b4a35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* 商品行 */
 .product-rows { flex: 1; overflow-y: auto; padding: 8px 10px; }

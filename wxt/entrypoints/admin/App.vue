@@ -57,13 +57,13 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.admin-root { display: flex; min-height: 100vh; background: #f5f7fa; opacity: 0; transition: opacity 0.4s; }
+.admin-root { display: flex; height: 100vh; background: #f5f7fa; opacity: 0; transition: opacity 0.4s; }
 .admin-root.content-visible { opacity: 1; }
 .sidebar { width: 200px; min-height: 100vh; position: fixed; top: 0; left: 0; }
 .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 20px 16px 16px; border-bottom: 1px solid #e4e7ed; margin-bottom: 8px; }
 .brand-icon { display: flex; }
 .brand-text { font-size: 16px; font-weight: 700; color: #000000; }
-.main-content { flex: 1; margin-left: 200px; padding: 24px 32px; }
+.main-content { flex: 1; margin-left: 200px; padding: 24px 32px; height: 100vh; overflow-y: auto; box-sizing: border-box; }
 .update-badge {
   margin-left: auto;
   display: flex;

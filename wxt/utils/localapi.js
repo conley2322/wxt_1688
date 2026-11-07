@@ -483,6 +483,10 @@ async function route(path, method, body, query) {
         appear_count: apps.length,
         comment_count: cmts.length,
       },
+      // 商品基础信息（IM 客服页询价商品卡展示用，本地库可能没有——未浏览过时为空）
+      offer_id,
+      title: product?.title || '',
+      main_img_url: product?.main_img_url || '',
       first_viewed_at: views.length ? Math.min(...views.map(v => v.viewed_at)) : null,
       last_viewed_at: views.length ? Math.max(...views.map(v => v.viewed_at)) : null,
       // 每次浏览的精确时间（降序），供管理页浏览时间线使用
@@ -654,12 +658,14 @@ async function route(path, method, body, query) {
     return ok(c)
   }
   const mSupCommentId = path.match(/^\/api\/v1\/suppliers\/comments\/([^/]+)$/)
-  if (mSupCommentId && method === 'PUT') {
+  // 关键：排除 'auto'——否则 PUT /suppliers/comments/auto 会先被 :id 路由截胡
+  // （把 'auto' 当评论 id 查不到 → 返回 ok(null)=200），自动保存从未真正落库
+  if (mSupCommentId && mSupCommentId[1] !== 'auto' && method === 'PUT') {
     const c = await db.get('comments', mSupCommentId[1])
     if (c) { c.text = body.text; c.updated_at = new Date().toISOString(); await db.put('comments', c) }
     return ok(c)
   }
-  if (mSupCommentId && method === 'DELETE') {
+  if (mSupCommentId && mSupCommentId[1] !== 'auto' && method === 'DELETE') {
     await db.delete('comments', mSupCommentId[1])
     return ok(null)
   }
@@ -684,6 +690,319 @@ async function route(path, method, body, query) {
       await db.put('suppliers', { name: target, address: '', memberId: '', created_at: Date.now() })
     }
     return ok(c)
+  }
+
+  // ── 旺旺客服：loginId ↔ 供应商 绑定（详情页每次浏览时回传，打通 IM 会话与真实店名）──
+  // POST /api/v1/suppliers/bind-loginid { login_id, supplier_name }
+  if (path === '/api/v1/suppliers/bind-loginid' && method === 'POST') {
+    const loginId = String(body.login_id || '').trim()
+    const name = String(body.supplier_name || '').trim()
+    if (!loginId || !name) return { code: 400, message: 'login_id / supplier_name 必填' }
+    let s = await db.get('suppliers', name)
+    if (!s) {
+      s = { name, address: '', memberId: '', loginIds: [loginId], created_at: Date.now() }
+    } else {
+      const ids = new Set(s.loginIds || [])
+      ids.add(loginId)
+      s = { ...s, loginIds: [...ids] }
+    }
+    await db.put('suppliers', s)
+    return ok({ name, login_id: loginId })
+  }
+  // GET /api/v1/suppliers/by-loginid?login_id=xx
+  const mSupByLogin = path === '/api/v1/suppliers/by-loginid'
+  if (mSupByLogin && method === 'GET') {
+    const loginId = String(query.login_id || '').trim()
+    if (!loginId) return ok(null)
+    const list = await db.all('suppliers')
+    const hit = list.find(s => (s.loginIds || []).includes(loginId))
+    return ok(hit ? { name: hit.name } : null)
+  }
+  // POST /api/v1/suppliers/profile { login_id, name, year?, info?, remove_loginid? }
+  // 旺旺客服「档案」Tab 里的真实店铺信息落库（loginId 绑定 + 基础信息）
+  // remove_loginid=true 时从其他供应商的 loginIds 里摘除该 login_id（清理历史污染映射）
+  if (path === '/api/v1/suppliers/profile' && method === 'POST') {
+    const loginId = String(body.login_id || '').trim()
+    const name = String(body.name || '').trim()
+    if (!loginId || !name) return { code: 400, message: 'login_id / name 必填' }
+    if (body.remove_loginid) {
+      const list = await db.all('suppliers')
+      for (const s of list) {
+        if (s.name !== name && (s.loginIds || []).includes(loginId)) {
+          await db.put('suppliers', { ...s, loginIds: s.loginIds.filter(x => x !== loginId) })
+        }
+      }
+      return ok({ name, login_id: loginId, removed: true })
+    }
+    let s = await db.get('suppliers', name)
+    if (!s) {
+      s = { name, address: '', memberId: '', loginIds: [loginId], created_at: Date.now() }
+    } else {
+      const ids = new Set(s.loginIds || [])
+      ids.add(loginId)
+      s = { ...s, loginIds: [...ids] }
+    }
+    if (body.year) s.year = String(body.year).slice(0, 20)
+    if (body.info && typeof body.info === 'object') s.archive_info = body.info
+    s.profile_updated_at = Date.now()
+    await db.put('suppliers', s)
+    // 摘除其他供应商名下的同名 login_id（防历史污染映射互相抢）
+    const list = await db.all('suppliers')
+    for (const other of list) {
+      if (other.name !== name && (other.loginIds || []).includes(loginId)) {
+        await db.put('suppliers', { ...other, loginIds: other.loginIds.filter(x => x !== loginId) })
+      }
+    }
+    return ok({ name, login_id: loginId })
+  }
+
+  // ── 旺旺客服：聊天记录（实时采集，永久保存，不参与自动清理）──
+  // POST /api/v1/chat/messages { messages: [{ id, conversation_code, login_id, display_name,
+  //   supplier_name, sender, nick, time, ts, text, images: [{ url }] }] }
+  // 图片在 background（本文件运行处）下载转 dataUrl 后落库，保证永久可看
+  const _imgCache = new Map()
+  async function fetchImageDataUrl(url) {
+    if (_imgCache.has(url)) return _imgCache.get(url)
+    let out = null
+    try {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 20000)
+      const res = await fetch(url, { signal: ctrl.signal, credentials: 'omit' })
+      clearTimeout(timer)
+      if (!res.ok) throw new Error('HTTP ' + res.status)
+      const blob = await res.blob()
+      if (blob.size > 8 * 1024 * 1024) throw new Error('too large')
+      out = await new Promise((resolve, reject) => {
+        const r = new FileReader()
+        r.onload = () => resolve(r.result)
+        r.onerror = reject
+        r.readAsDataURL(blob)
+      })
+    } catch { out = null }
+    _imgCache.set(url, out)
+    return out
+  }
+
+  if (path === '/api/v1/chat/messages' && method === 'POST') {
+    const incoming = Array.isArray(body.messages) ? body.messages.slice(0, 100) : []
+    let saved = 0
+    for (const msg of incoming) {
+      if (!msg || !msg.id) continue
+      const exist = await db.get('chat_messages', msg.id)
+      if (exist) {
+        // 旧记录补全：链接（链接桥上线前入库的没有）、时间戳（早期解析失败兜底成采集时刻的）
+        const needLinks = msg.links && msg.links.length && (!exist.links || !exist.links.length)
+        const needTs = msg.ts && exist.ts !== msg.ts
+        if (needLinks || needTs) {
+          if (needLinks) {
+            const images = []
+            for (const img of (msg.images || []).slice(0, 9)) {
+              const url = typeof img === 'string' ? img : img?.url
+              if (!url) continue
+              const src = await fetchImageDataUrl(url)
+              images.push({ url, src })
+            }
+            exist.links = msg.links
+            exist.images = images.length ? images : exist.images
+          }
+          if (needTs) {
+            exist.ts = msg.ts
+            if (msg.time && !exist.time) exist.time = msg.time
+          }
+          await db.put('chat_messages', exist)
+        }
+        continue
+      }
+      // 下载图片（每张独立尝试，失败保留原 url）
+      const images = []
+      for (const img of (msg.images || []).slice(0, 9)) {
+        const url = typeof img === 'string' ? img : img?.url
+        if (!url) continue
+        const src = await fetchImageDataUrl(url)
+        images.push({ url, src })
+      }
+      const record = {
+        id: msg.id,
+        conversation_code: msg.conversation_code || '',
+        login_id: msg.login_id || '',
+        display_name: msg.display_name || '',
+        supplier_name: msg.supplier_name || '',
+        sender: msg.sender === 'me' ? 'me' : 'them',
+        nick: msg.nick || '',
+        time: msg.time || '',
+        ts: Number(msg.ts) || Date.now(),
+        text: String(msg.text || '').slice(0, 2000),
+        images,
+        links: (msg.links || []).slice(0, 5).map(l => ({ text: String(l.text || '').slice(0, 80), href: String(l.href || '').slice(0, 300), offer_id: String(l.offer_id || '') })),
+        saved_at: Date.now(),
+      }
+      await db.put('chat_messages', record)
+      saved++
+    }
+    return ok({ saved })
+  }
+  // GET /api/v1/chat/messages?login_id=xx&conversation_code=xx&supplier_name=xx&limit=300
+  if (path === '/api/v1/chat/messages' && method === 'GET') {
+    const all = await db.all('chat_messages')
+    let list = all
+    if (query.login_id) list = list.filter(r => r.login_id === query.login_id)
+    if (query.conversation_code) list = list.filter(r => r.conversation_code === query.conversation_code)
+    if (query.supplier_name) list = list.filter(r => r.supplier_name === query.supplier_name)
+    list.sort((a, b) => a.ts - b.ts)
+    const limit = Math.max(1, parseInt(query.limit) || 300)
+    return ok(list.slice(-limit))
+  }
+  // GET /api/v1/suppliers/stats?name=xx — 供应商维度聚合数据（IM 信息页 + 管理后台数据概览）
+  if (path === '/api/v1/suppliers/stats' && method === 'GET') {
+    const name = decodeURIComponent(query.name || '')
+    if (!name) return ok({ totals: { product_count: 0, view_count: 0, appear_count: 0 }, daily: [], timeline: [] })
+    const [products, records, appears] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('appear_records'),
+    ])
+    const offerIds = new Set(products.filter(p => p.supplier_name === name).map(p => p.offer_id))
+    const views = records.filter(r => offerIds.has(r.offer_id))
+    const apps = appears.filter(r => offerIds.has(r.offer_id))
+    const titleOf = {}
+    for (const p of products) titleOf[p.offer_id] = p.title
+    // 近 30 天按天聚合（浏览 + 出现）
+    const daily = []
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    for (let i = 29; i >= 0; i--) {
+      const dayStart = today.getTime() - i * DAY
+      const d = new Date(dayStart)
+      daily.push({
+        date: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        view: views.filter(v => v.viewed_at >= dayStart && v.viewed_at < dayStart + DAY).length,
+        appear: apps.filter(v => v.appeared_at >= dayStart && v.appeared_at < dayStart + DAY).length,
+      })
+    }
+    // 浏览时间轴：该供应商所有商品的浏览事件（新→旧，最近 50 条）
+    const timeline = views
+      .slice()
+      .sort((a, b) => b.viewed_at - a.viewed_at)
+      .slice(0, 50)
+      .map(v => ({ ts: v.viewed_at, offer_id: v.offer_id, title: titleOf[v.offer_id] || v.offer_id }))
+    const viewTimes = views.map(v => v.viewed_at)
+    // 24 小时浏览时段分布
+    const hourly = new Array(24).fill(0)
+    for (const v of views) hourly[new Date(v.viewed_at).getHours()]++
+    // 热力图：星期 × 小时 浏览次数矩阵（0=周一 … 6=周日）
+    const heatmap = Array.from({ length: 7 }, () => new Array(24).fill(0))
+    for (const v of views) {
+      const d = new Date(v.viewed_at)
+      const wd = (d.getDay() + 6) % 7
+      heatmap[wd][d.getHours()]++
+    }
+    return ok({
+      totals: {
+        product_count: offerIds.size,
+        view_count: views.length,
+        appear_count: apps.length,
+      },
+      first_view_at: viewTimes.length ? Math.min(...viewTimes) : null,
+      last_view_at: viewTimes.length ? Math.max(...viewTimes) : null,
+      daily,
+      hourly,
+      heatmap,
+      timeline,
+    })
+  }
+
+  // POST /api/v1/chat/rekey { login_id, supplier_name } — 供应商解析成功后，把该登录 ID
+  // 下历史聊天记录的 supplier_name 从显示名兜底改挂为真实供应商名
+  if (path === '/api/v1/chat/rekey' && method === 'POST') {
+    const loginId = String(body.login_id || '').trim()
+    const name = String(body.supplier_name || '').trim()
+    if (!loginId || !name) return { code: 400, message: 'login_id / supplier_name 必填' }
+    const { rows } = await getAllWithKeys('chat_messages')
+    let n = 0
+    for (const row of rows) {
+      if (row.login_id === loginId && row.supplier_name !== name) {
+        // chat_messages 是 keyPath='id' 的内联主键 store，put 只传值（key 在值里）
+        await db.put('chat_messages', { ...row, supplier_name: name })
+        n++
+      }
+    }
+    if (n) await log('POST /api/v1/chat/rekey', `把 ${loginId} 的 ${n} 条聊天记录改挂到「${name}」名下`)
+    return ok({ updated: n })
+  }
+
+  // POST /api/v1/chat/repair-ts — 一次性修复存量记录的时间戳（time 字符串重新解析，
+  // 替换掉当年解析失败兜底成 Date.now() 的假时间），供管理后台调用
+  if (path === '/api/v1/chat/repair-ts' && method === 'POST') {
+    const { rows } = await getAllWithKeys('chat_messages')
+    let fixed = 0
+    for (const row of rows) {
+      const parsed = row.time ? new Date(String(row.time).replace(' ', 'T')).getTime() : NaN
+      if (Number.isFinite(parsed) && parsed > 0 && parsed !== row.ts) {
+        await db.put('chat_messages', { ...row, ts: parsed })
+        fixed++
+      }
+    }
+    await log('POST /api/v1/chat/repair-ts', `修复了 ${fixed} 条聊天记录的时间戳`)
+    return ok({ fixed })
+  }
+
+  // POST /api/v1/chat/delete { supplier_name? | conversation_code? | login_id? } — 管理后台按供应商/会话删除
+  if (path === '/api/v1/chat/delete' && method === 'POST') {
+    let n = 0
+    if (body.supplier_name) {
+      n += await db.deleteWhere('chat_messages', r => r.supplier_name === body.supplier_name)
+      await log('POST /api/v1/chat/delete', `删除了「${body.supplier_name}」的聊天记录 ${n} 条`)
+    } else if (body.conversation_code) {
+      n += await db.deleteWhere('chat_messages', r => r.conversation_code === body.conversation_code)
+      await log('POST /api/v1/chat/delete', `删除了会话 ${body.conversation_code.slice(0, 30)} 的聊天记录 ${n} 条`)
+    } else if (body.login_id) {
+      n += await db.deleteWhere('chat_messages', r => r.login_id === body.login_id)
+      await log('POST /api/v1/chat/delete', `删除了 ${body.login_id} 的聊天记录 ${n} 条`)
+    } else {
+      return { code: 400, message: '需指定 supplier_name / conversation_code / login_id 之一' }
+    }
+    return ok({ deleted: n })
+  }
+  // GET /api/v1/chat/conversations —— 管理后台「聊天记录」页数据源
+  if (path === '/api/v1/chat/conversations' && method === 'GET') {
+    const all = await db.all('chat_messages')
+    const map = new Map()
+    for (const r of all) {
+      const g = map.get(r.conversation_code) || {
+        conversation_code: r.conversation_code,
+        login_id: r.login_id,
+        display_name: r.display_name,
+        supplier_name: r.supplier_name,
+        count: 0, image_count: 0, bytes: 0, first_ts: r.ts, last_ts: r.ts,
+      }
+      g.count++
+      g.image_count += (r.images || []).length
+      g.bytes += JSON.stringify(r).length
+      g.first_ts = Math.min(g.first_ts, r.ts)
+      g.last_ts = Math.max(g.last_ts, r.ts)
+      if (!g.supplier_name && r.supplier_name) g.supplier_name = r.supplier_name
+      map.set(r.conversation_code, g)
+    }
+    const conversations = [...map.values()].sort((a, b) => b.last_ts - a.last_ts)
+    // 按供应商聚合（管理后台左栏：供应商名称 + 单个占用 + 删除）
+    const smap = new Map()
+    for (const r of all) {
+      const key = r.supplier_name || r.display_name || r.login_id || '未知'
+      const g = smap.get(key) || { key, supplier_name: r.supplier_name || '', display_name: r.display_name || '', login_id: r.login_id || '', count: 0, image_count: 0, bytes: 0, first_ts: r.ts, last_ts: r.ts }
+      g.count++
+      g.image_count += (r.images || []).length
+      g.bytes += JSON.stringify(r).length
+      g.first_ts = Math.min(g.first_ts, r.ts)
+      g.last_ts = Math.max(g.last_ts, r.ts)
+      if (!g.supplier_name && r.supplier_name) g.supplier_name = r.supplier_name
+      smap.set(key, g)
+    }
+    const suppliers = [...smap.values()].sort((a, b) => b.last_ts - a.last_ts)
+    const stats = {
+      conversations: conversations.length,
+      suppliers: suppliers.length,
+      messages: all.length,
+      images: conversations.reduce((s, c) => s + c.image_count, 0),
+      bytes: conversations.reduce((s, c) => s + c.bytes, 0),
+    }
+    return ok(conversations, { stats, suppliers })
   }
 
   // ── 供应商标签接口已移除（标签功能下线）──
@@ -847,6 +1166,6 @@ export async function handle(pathWithQuery, method = 'GET', body = undefined) {
     return await route(path, method.toUpperCase(), body, query)
   } catch (e) {
     console.error('[localapi]', method, path, e)
-    return { code: 500, message: '本地数据操作失败', error: e.message }
+    return { code: 500, message: '本地数据操作失败: ' + (e && e.message), error: e && e.message }
   }
 }

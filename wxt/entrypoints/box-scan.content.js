@@ -20,6 +20,74 @@ export default defineContentScript({
     const host = location.hostname
     // 列表页走 box-content 的 DOM 选择器规则，详情页归 win-content，都不需要 fiber 扫描
     if (host === DETAIL_HOST || LIST_HOSTS.includes(host)) return
+    // 旺旺客服页（IM）：没有商品卡片网格，但需要主世界读聊天 iframe 的会话数据
+    // （对方登录 ID sNick 在 React fiber 上，隔离世界读不到）→ 写到外层 <html> 的
+    // data-alocs-im-loginid 属性，由 im 注入逻辑（隔离世界）读取
+    if (location.pathname.startsWith('/app/ocms-fusion-components-1688/')) {
+      console.log('[box:scan] IM 页：启动会话 loginId 桥接')
+      const fiberKey = el => Object.keys(el).find(k => k.startsWith('__reactFiber'))
+      setInterval(() => {
+        try {
+          const frame = document.querySelector('iframe.layout-iframe')
+          const doc = frame && frame.contentDocument
+          const hdr = doc && doc.querySelector('.conversation-header')
+          if (!hdr) return
+          const fk = fiberKey(hdr)
+          if (!fk) return
+          let fiber = hdr[fk]
+          let loginId = ''
+          for (let i = 0; i < 12 && fiber; i++) {
+            const p = fiber.memoizedProps
+            if (p && typeof p.sNick === 'string' && p.sNick) { loginId = p.sNick; break }
+            fiber = fiber.return
+          }
+          if (loginId) {
+            document.documentElement.dataset.alocsImLoginId = loginId
+          }
+        } catch {}
+      }, 1500)
+
+      // ── 消息链接桥：商品卡片消息的 DOM 里没有链接（React 点击跳转），
+      // 链接只在 _imsdk 消息实体里（summary/originalData 含 detail.1688.com/offer/x.html）。
+      // 按当前会话拉消息，把 {sendTime: [商品URL]} 写到 data-alocs-im-msg-links，
+      // 采集端按 DOM 时间 → sendTime 对齐后给消息挂链接。
+      let lastMsgCode = ''
+      let lastLinksJson = ''
+      setInterval(async () => {
+        try {
+          const frame = document.querySelector('iframe.layout-iframe')
+          const doc = frame && frame.contentDocument
+          const activeItem = doc && doc.querySelector('.conversation-item.active')
+          if (!activeItem || !activeItem.id) return
+          const code = activeItem.id
+          const imsdk = frame.contentWindow && frame.contentWindow._imsdk
+          if (!imsdk) return
+          if (code !== lastMsgCode) {
+            lastMsgCode = code
+            document.documentElement.dataset.alocsImMsgLinks = ''
+          }
+          const ms = imsdk.getMessageService()
+          const r = await new Promise((res, rej) => ms.listMessageWithConversationCode({
+            cursor: { sendTime: 0 }, fetchType: 0, conversationCode: code, count: 100,
+            dataCallback: res, errorCallBack: rej,
+          }))
+          const list = r.data || []
+          const map = {}
+          for (const m of list) {
+            const urls = (JSON.stringify(m).match(/https?:[^"]*detail\.1688\.com\/offer\/\d+\.html/g)) || []
+            if (urls.length && m.sendTime) {
+              map[String(m.sendTime)] = [...new Set(urls)].slice(0, 3)
+            }
+          }
+          const json = JSON.stringify(map)
+          if (json !== lastLinksJson) {
+            lastLinksJson = json
+            document.documentElement.dataset.alocsImMsgLinks = json
+          }
+        } catch {}
+      }, 5000)
+      return
+    }
 
     console.log('[box:scan] 主世界扫描器启动 — host:', host)
 

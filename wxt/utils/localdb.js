@@ -3,7 +3,7 @@
 // 存储用量显示 / 软上限自动清理 / JSON 导入导出 都在这里。
 
 const DB_NAME = 'alocs-local'
-const DB_VERSION = 3 // v3: 新增 remote_snapshot（多人服务器数据快照）
+const DB_VERSION = 4 // v4: 新增 chat_messages（旺旺客服聊天记录，永久保存）
 
 // store 名 → keyPath（null 表示自增主键）
 export const STORES = {
@@ -11,11 +11,12 @@ export const STORES = {
   products: 'offer_id',   // { offer_id, title, main_img_url, supplier_name, created_at }
   view_records: null,     // 自增 { offer_id, viewed_at } — 详情页浏览记录
   appear_records: null,   // 自增 { offer_id, appeared_at } — 列表页出现记录（组件渲染即 +1）
-  suppliers: 'name',      // { name, address, memberId, created_at }
+  suppliers: 'name',      // { name, address, memberId, loginIds?, created_at }
   comments: 'id',         // { id, kind:'product'|'supplier', target, text, created_at, updated_at }
   updates: 'id',          // { id, version, title, content, status, created_by, created_at, updated_at }
   operation_logs: null,   // 自增 { action, detail, created_at }
   remote_snapshot: null,  // key 'snapshot'：服务器拉取的全量数据 + server_time
+  chat_messages: 'id',    // { id, conversation_code, login_id, display_name, supplier_name, sender, nick, time, ts, text, images } — 旺旺聊天记录（永久，不参与自动清理）
 }
 
 let dbPromise = null

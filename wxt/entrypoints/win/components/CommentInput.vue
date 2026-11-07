@@ -1,5 +1,5 @@
 <template>
-  <div class="rich-editor-wrap" :class="{ fullscreen: isFullscreen }">
+  <div ref="rootEl" class="rich-editor-wrap" :class="{ fullscreen: isFullscreen }">
     <div class="editor-header">
       <div id="_toolbar_normal" class="toolbar-container" :style="{ display: isFullscreen ? 'none' : '' }"></div>
       <div id="_toolbar_full" class="toolbar-container" :style="{ display: isFullscreen ? '' : 'none' }"></div>
@@ -36,6 +36,7 @@ const props = defineProps({
 let editor = null
 let toolbarNormal = null
 let toolbarFull = null
+const rootEl = ref(null)
 const isFullscreen = ref(false)
 const canFullscreen = ref(true)
 
@@ -124,9 +125,14 @@ onMounted(async () => {
     }
   } catch {}
 
-  // 创建编辑器
+  // 创建编辑器。注意：选择器一律在自己根节点内查元素后传「元素对象」——
+  // 不能传字符串，wangEditor 内部用全局 document.querySelector，
+  // 跨文档场景（如 IM 页面板挂在同源 iframe 里）会查错文档导致编辑器挂不上
+  const containerEl = rootEl.value?.querySelector('#_editor_container')
+  const tbNormalEl = rootEl.value?.querySelector('#_toolbar_normal')
+  const tbFullEl = rootEl.value?.querySelector('#_toolbar_full')
   editor = createEditor({
-    selector: '#_editor_container',
+    selector: containerEl,
     html: '<p><br></p>',
     config: {
       placeholder: props.placeholder,
@@ -152,11 +158,11 @@ onMounted(async () => {
   })
 
   toolbarNormal = createToolbar({
-    editor, selector: '#_toolbar_normal',
+    editor, selector: tbNormalEl,
     config: { toolbarKeys: normalKeys }, mode: 'simple',
   })
   toolbarFull = createToolbar({
-    editor, selector: '#_toolbar_full',
+    editor, selector: tbFullEl,
     config: { toolbarKeys: FULL_TOOLBAR }, mode: 'simple',
   })
 

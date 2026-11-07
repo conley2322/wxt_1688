@@ -3,6 +3,7 @@ import { createApp, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import App from '../entrypoints/box/App.vue'
 import { api as dataApi } from '../utils/dataClient.js'
+import { setupIm } from '../entrypoints/im/inject.js'
 
 // 列表页域名：搜索结果 / 货源列表 / 首页 / 以图搜图
 const LIST_HOSTS = ['s.1688.com', 'search.1688.com', 'www.1688.com', 'air.1688.com']
@@ -64,6 +65,16 @@ export default defineContentScript({
 
     if (host === DETAIL_HOST) {
       console.log('[box] detail.1688.com 详情页，由 win-content 处理，box 跳过')
+      return
+    }
+    // 旺旺客服页（IM 聊天）不是列表页也不是店铺页：走「备注」Tab 注入流程。
+    // 注意：QQ 浏览器把 manifest 注册快照锁在 Secure Preferences 里，新增 content script
+    // 入口在原位覆盖更新下永不生效，因此 IM 逻辑静态并入本脚本（文件内容更新不受限）。
+    // air.1688.com 在 LIST_HOSTS 里（以图搜图等列表页），但其 IM 应用路径不能走列表流程，
+    // 否则 MutationObserver 空转 + 兜底扫描弹「页面改版」误报 toast
+    if (location.pathname.startsWith('/app/ocms-fusion-components-1688/')) {
+      console.log('[box] 旺旺客服页（IM），交给备注 Tab 注入流程')
+      setupIm()
       return
     }
     const isListHost = LIST_HOSTS.includes(host)

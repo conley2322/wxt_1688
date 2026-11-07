@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import DraggableWindow from './components/DraggableWindow.vue'
 import { useApiStore } from '@/stores/api/api.js'
 import { useDomStore } from '@/stores/dom.js'
+import { api as dataApi } from '@/utils/dataClient.js'
 import stopLoading from '@/utils/stopLoading.js'
 
 
@@ -25,9 +26,11 @@ const currentTab = computed(() => {
 onMounted(async () => {
   console.log('App mounted win页面')
 
-  // 读取设置，决定是否停止页面加载
+  // 读取设置，决定是否停止页面加载（显式开启才停；默认值 false，见 stores/app.js）
+  // 修复：原来的 `!== false` 判断在设置未写入时也会 window.stop()，
+  // 把详情页加载拦腰截断，偶发整页空白只剩加载符
   const stored = await browser.storage.local.get('appSettings')
-  if (stored.appSettings?.enableStopLoading !== false) {
+  if (stored.appSettings?.enableStopLoading === true) {
     stopLoading()
   }
 
@@ -67,6 +70,21 @@ onMounted(async () => {
     if (data.CompanyName) {
       store.createSupplier(data.CompanyName, data.memberId).catch(() => {})
     }
+
+    // 采集卖家登录 ID → 店铺公司名 映射（旺旺客服页据此把会话对应到真实供应商）
+    // 详情页内联脚本里有 "sellerLoginId":"xxx"（隔离世界读不到主世界的 window.context，走脚本正则）
+    try {
+      const sellerLoginId = (() => {
+        for (const s of document.querySelectorAll('script')) {
+          const m = (s.textContent || '').match(/"sellerLoginId"\s*:\s*"([^"]{2,40})"/)
+          if (m) return m[1]
+        }
+        return ''
+      })()
+      if (sellerLoginId && data.CompanyName) {
+        dataApi('/api/v1/suppliers/bind-loginid', 'POST', { login_id: sellerLoginId, supplier_name: data.CompanyName }).catch(() => {})
+      }
+    } catch {}
   } catch (e) {
     console.error('Win 初始化失败:', e)
   }
