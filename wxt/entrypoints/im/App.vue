@@ -231,13 +231,40 @@ async function loadChat() {
   chatLoading.value = false
 }
 
+// ── 备注小红点：备注有内容且当前不在备注页时，左侧导航的「备注」上提示 ──
+const noteHasContent = ref(false)
+const noteUnread = ref(false)
+async function checkNoteContent() {
+  if (!supplierName.value) { noteHasContent.value = false; noteUnread.value = false; return }
+  try {
+    const res = await api(`/api/v1/suppliers/comments?supplier_name=${encodeURIComponent(supplierName.value)}`)
+    const list = res.code === 200 && Array.isArray(res.data) ? res.data : []
+    const text = list[0]?.text || ''
+    const stripped = text.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim()
+    noteHasContent.value = !!stripped || /<img[^>]+src=/.test(text)
+  } catch {
+    noteHasContent.value = false
+  }
+  noteUnread.value = noteHasContent.value && activePage.value !== 'note'
+}
+
 async function refreshAll() {
   await resolveSupplier()
   await loadProducts(supplierName.value)
   await loadSupplierStats(supplierName.value)
   await loadChat()
+  await checkNoteContent()
   loadedOnce.value = true
 }
+
+// 切换左栏页面：进入备注清红点；离开备注且备注有内容则点亮
+watch(activePage, (page) => {
+  if (page === 'note') {
+    noteUnread.value = false
+  } else if (noteHasContent.value) {
+    noteUnread.value = true
+  }
+})
 
 // ── 会话切换感知：头部显示名变化时重新解析 ──
 let headerObserver = null
@@ -272,16 +299,12 @@ const DEFAULT_PHRASES = [
   '多久能发货？', '可以定制吗？', '物流走什么快递？', '有量大优惠吗？',
 ]
 const phrases = ref([])
-const newPhrase = ref('')
 const phraseTip = ref('')
 let tipTimer = null
 
 async function loadPhrases() {
   const { imQuickPhrases } = await browser.storage.local.get('imQuickPhrases')
   phrases.value = Array.isArray(imQuickPhrases) && imQuickPhrases.length ? [...imQuickPhrases] : [...DEFAULT_PHRASES]
-}
-async function savePhrases() {
-  await browser.storage.local.set({ imQuickPhrases: phrases.value })
 }
 function flashTip(text) {
   phraseTip.value = text
@@ -291,17 +314,6 @@ function flashTip(text) {
 function usePhrase(p) {
   const ok = insertIntoChatInput(p)
   flashTip(ok ? '已填入聊天输入框，请确认后自行发送' : '未找到聊天输入框（请先选中左侧会话）')
-}
-function addPhrase() {
-  const t = newPhrase.value.trim()
-  if (!t) return
-  phrases.value.push(t.slice(0, 60))
-  newPhrase.value = ''
-  savePhrases()
-}
-function removePhrase(i) {
-  phrases.value.splice(i, 1)
-  savePhrases()
 }
 
 function openOffer(id) {
@@ -358,6 +370,7 @@ watch(supplierName, (name) => loadProducts(name))
         :title="p.label + '（可拖拽排序）'"
       >
         <span class="nav-icon">{{ p.icon }}</span><span class="nav-label">{{ p.label }}</span>
+        <span v-if="p.key === 'note' && noteUnread" class="nav-dot"></span>
       </div>
     </div>
 
@@ -394,43 +407,42 @@ watch(supplierName, (name) => loadProducts(name))
         </div>
       </div>
 
-      <!-- 聊天页 -->
-      <div v-show="activePage === 'chat'" class="page">
-        <div class="sec">
-          <div class="page-row-title">
-            快捷话术 <span class="sec-tip">（点击填入聊天输入框，确认后自己点发送）</span>
-          </div>
-          <div class="phrase-grid">
-            <div v-for="(p, i) in phrases" :key="i + p" class="phrase-chip" :title="p" @click="usePhrase(p)">
-              <span class="phrase-text">{{ p }}</span>
-              <span class="phrase-del" title="删除" @click.stop="removePhrase(i)">×</span>
+      <!-- 聊天页：话术固定在顶部（不随聊天滚动），聊天记录独立滚动 -->
+      <div v-show="activePage === 'chat'" class="page page-chat">
+        <div class="chat-fixed">
+          <div class="sec phrase-sec">
+            <div class="page-row-title">
+              快捷话术 <span class="sec-tip">（点击填入聊天输入框；增删在管理后台「系统设置」）</span>
             </div>
+            <div class="phrase-grid">
+              <div v-for="(p, i) in phrases" :key="i + p" class="phrase-chip" :title="p" @click="usePhrase(p)">
+                <span class="phrase-text">{{ p }}</span>
+              </div>
+            </div>
+            <div v-if="phraseTip" class="phrase-tip">{{ phraseTip }}</div>
           </div>
-          <div class="phrase-add">
-            <input v-model="newPhrase" class="phrase-input" placeholder="添加常用话术…" maxlength="60" @keyup.enter="addPhrase" />
-            <button class="phrase-add-btn" @click="addPhrase">添加</button>
-          </div>
-          <div v-if="phraseTip" class="phrase-tip">{{ phraseTip }}</div>
         </div>
-        <div class="sec chat-sec">
-          <div class="page-row-title">
-            聊天记录 <span class="sec-tip">（实时保存，最近 {{ chatMsgs.length }} 条）</span>
-            <button class="chat-refresh" title="刷新聊天记录" @click="loadChat">↻</button>
-          </div>
-          <div v-if="!chatMsgs.length" class="empty-tip">{{ chatLoading ? '加载中…' : '暂无聊天记录（选中会话并收发消息后自动保存）' }}</div>
-          <div v-for="m in chatMsgs" :key="m.id" class="chat-row" :class="{ self: m.sender === 'me' }">
-            <div class="chat-meta">
-              <span class="chat-nick">{{ m.sender === 'me' ? '我' : (m.nick || m.display_name || '对方') }}</span>
-              <span class="chat-time">{{ m.time }}</span>
+        <div class="chat-scroll">
+          <div class="sec chat-sec">
+            <div class="page-row-title">
+              聊天记录 <span class="sec-tip">（实时保存，最近 {{ chatMsgs.length }} 条）</span>
+              <button class="chat-refresh" title="刷新聊天记录" @click="loadChat">↻</button>
             </div>
-            <div v-if="m.text" class="chat-text">{{ m.text }}</div>
-            <div v-if="m.links && m.links.length" class="chat-links">
-              <span v-for="(l, i) in m.links" :key="i" class="chat-link" :title="l.text || l.href" @click="openLink(l)">
-                🔗 {{ l.text ? (l.text.length > 24 ? l.text.slice(0, 24) + '…' : l.text) : '打开商品' }} ↗
-              </span>
-            </div>
-            <div v-if="m.images && m.images.length" class="chat-imgs">
-              <img v-for="(img, i) in m.images" :key="i" class="chat-img" :src="img.src || img.url" loading="lazy" />
+            <div v-if="!chatMsgs.length" class="empty-tip">{{ chatLoading ? '加载中…' : '暂无聊天记录（选中会话并收发消息后自动保存）' }}</div>
+            <div v-for="m in chatMsgs" :key="m.id" class="chat-row" :class="{ self: m.sender === 'me' }">
+              <div class="chat-meta">
+                <span class="chat-nick">{{ m.sender === 'me' ? '我' : (m.nick || m.display_name || '对方') }}</span>
+                <span class="chat-time">{{ m.time }}</span>
+              </div>
+              <div v-if="m.text" class="chat-text">{{ m.text }}</div>
+              <div v-if="m.links && m.links.length" class="chat-links">
+                <span v-for="(l, i) in m.links" :key="i" class="chat-link" :title="l.text || l.href" @click="openLink(l)">
+                  🔗 {{ l.text ? (l.text.length > 24 ? l.text.slice(0, 24) + '…' : l.text) : '打开商品' }} ↗
+                </span>
+              </div>
+              <div v-if="m.images && m.images.length" class="chat-imgs">
+                <img v-for="(img, i) in m.images" :key="i" class="chat-img" :src="img.src || img.url" loading="lazy" />
+              </div>
             </div>
           </div>
         </div>
@@ -540,6 +552,26 @@ watch(supplierName, (name) => loadProducts(name))
 }
 .nav-icon { font-size: 16px; line-height: 1.2; }
 .nav-label { font-size: 11px; margin-top: 2px; }
+.nav-item { position: relative; }
+.nav-dot {
+  position: absolute;
+  top: 5px;
+  right: 12px;
+  width: 7px;
+  height: 7px;
+  background: #ff4d4f;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px #fff;
+}
+/* 聊天页：话术固定顶部，聊天记录独立滚动 */
+.page-chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.chat-fixed { flex-shrink: 0; background: #fff; border-bottom: 1px solid #f0f0f0; }
+.chat-fixed .sec { border-bottom: none; }
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 
 /* 右侧内容区 */
 .content-area {

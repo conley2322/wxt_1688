@@ -153,6 +153,9 @@ async function load() {
     const names = mergedEntries.value.map(e => e.name)
     if (!currentName.value || !names.includes(currentName.value)) {
       currentName.value = names[0] || ''
+      // 初始页签跟随拖拽后的第一位（仅在选择变化时设置，不干扰自动刷新中的当前页签）
+      rightTab.value = tabOrder.value[0] || 'note'
+      loadMessages(currentName.value)
     }
   } catch (e) {
     console.error('[MySources] 加载失败:', e)

@@ -12,6 +12,30 @@ const appStore = useAppStore()
 
 const boxDefault = ref('product')
 
+// ── 快捷话术管理（客服页聊天面板顶部显示）──
+const DEFAULT_PHRASES = [
+  '你好，这款有货吗？', '最低多少钱？', '支持一件代发吗？', '可以发样品吗？',
+  '多久能发货？', '可以定制吗？', '物流走什么快递？', '有量大优惠吗？',
+]
+const phrases = ref([])
+const newPhrase = ref('')
+
+async function savePhrases() {
+  await browser.storage.local.set({ imQuickPhrases: [...phrases.value] })
+}
+function addPhrase() {
+  const t = newPhrase.value.trim()
+  if (!t) return
+  phrases.value.push(t.slice(0, 60))
+  newPhrase.value = ''
+  savePhrases()
+  ElMessage.success('已添加')
+}
+function removePhrase(i) {
+  phrases.value.splice(i, 1)
+  savePhrases()
+}
+
 // 富文本工具栏配置（精简：仅保留常用项，避免窗口内换行）
 const toolbarConfig = ref({
   bold: true,
@@ -304,7 +328,7 @@ async function onDisconnect() {
 }
 
 onMounted(async () => {
-  const stored = await browser.storage.local.get(['boxDefault', 'toolbarConfig', 'appSettings'])
+  const stored = await browser.storage.local.get(['boxDefault', 'toolbarConfig', 'appSettings', 'imQuickPhrases'])
   if (stored.boxDefault) boxDefault.value = stored.boxDefault
   if (stored.toolbarConfig) Object.assign(toolbarConfig.value, stored.toolbarConfig)
 
@@ -315,6 +339,12 @@ onMounted(async () => {
     pageSwitches.value.enableShopPage = stored.appSettings.enableShopPage ?? true
     pageSwitches.value.enableStopLoading = stored.appSettings.enableStopLoading ?? true
     pageSwitches.value.enableCleanUrl = stored.appSettings.enableCleanUrl ?? true
+  }
+  if (Array.isArray(stored.imQuickPhrases) && stored.imQuickPhrases.length) {
+    phrases.value = [...stored.imQuickPhrases]
+  } else {
+    // 未自定义过 → 展示与客服页面板相同的默认话术（首次编辑时才落盘）
+    phrases.value = [...DEFAULT_PHRASES]
   }
   loadStorage()
   await refreshRemote()
@@ -471,6 +501,23 @@ async function autoSave() {
       </el-form>
     </el-card>
 
+    <!-- 快捷话术管理（客服页聊天面板顶部显示） -->
+    <el-card style="margin-bottom:16px">
+      <template #header>快捷话术（客服页聊天面板顶部显示，点击自动填入输入框）</template>
+      <div class="phrase-manage">
+        <div v-for="(p, i) in phrases" :key="i + p" class="pm-row">
+          <span class="pm-text">{{ p }}</span>
+          <el-button size="small" type="danger" plain @click="removePhrase(i)">删除</el-button>
+        </div>
+        <div v-if="!phrases.length" class="pm-empty">暂无话术，添加后显示在客服页聊天面板顶部</div>
+        <div class="pm-add">
+          <el-input v-model="newPhrase" placeholder="添加常用话术…" maxlength="60" class="pm-input" @keyup.enter="addPhrase" />
+          <el-button type="primary" @click="addPhrase">添加</el-button>
+        </div>
+        <div class="pm-tip">删除/添加即时生效，客服页聊天面板自动同步</div>
+      </div>
+    </el-card>
+
     <!-- 1688 页面渲染开关 -->
     <el-card style="margin-bottom:16px">
       <template #header>1688 页面渲染开关（修改后自动保存）</template>
@@ -619,4 +666,18 @@ async function autoSave() {
 .storage-usage { font-size: 16px; font-weight: 700; color: #303133; }
 .store-desc { font-size: 12px; color: #909399; }
 .import-btn { margin: 0 12px; }
+
+/* 快捷话术管理 */
+.pm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f5f5f5;
+}
+.pm-text { flex: 1; font-size: 13px; color: #303133; }
+.pm-empty { font-size: 12px; color: #bbb; padding: 6px 0; }
+.pm-add { display: flex; gap: 8px; margin-top: 10px; }
+.pm-input { flex: 1; max-width: 320px; }
+.pm-tip { font-size: 11px; color: #bbb; margin-top: 6px; }
 </style>

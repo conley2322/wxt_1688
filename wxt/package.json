@@ -2,7 +2,7 @@
   "name": "alocs-1688-standalone",
   "description": "ALOCS-1688（单机 / 多人共享双模式）",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
