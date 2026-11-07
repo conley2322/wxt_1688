@@ -1115,6 +1115,14 @@ function hasCommentContent(html) {
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
   {
+    id: 'builtin-1.2.1', version: '1.2.1', title: '修复筛选：结果与计数一致，剔除无内容选项', status: 'published',
+    created_at: '2026-11-07T14:50:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>【修复了什么】筛选结果不匹配：勾选「经销批发（1）」后列表仍出现大量无关供应商——原因是仅聊天记录（无货源数据）的供应商绕过了筛选条件。现在所有条目统一参与筛选，勾选后面板数字和列表数量完全一致</li>'
+      + '<li>【修复了什么】无内容选项不再显示：筛选选项改为级联计数——每个选项的数字都基于「通过搜索 + 其他维度已选条件」的真实条目统计，数量为 0 的选项自动消失，没有区分度的维度不再塞入面板</li>'
+      + '</ul>',
+  },
+  {
     id: 'builtin-1.2.0', version: '1.2.0', title: '供应商工厂信息：后台新增页签 + 全字段搜索筛选', status: 'published',
     created_at: '2026-11-07T14:20:00.000Z', created_by: 'Conley',
     content: '<ul>'

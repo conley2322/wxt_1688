@@ -18,59 +18,109 @@ const stats = ref({ total_suppliers: 0, suppliers_with_notes: 0, total_products:
 const loading = ref(false)
 const searchText = ref('')
 
-// ── 工厂信息筛选（选项由当前数据自动生成，多选叠加）──
+// ── 工厂信息筛选（级联计数：面板上每个选项的数字都对应列表里真实可见的条目）──
 const filterOpen = ref(false)
 const activeFilters = ref({})   // { [facetKey]: [value] }
-const FIELD_FACETS = [
+
+// 全部筛选维度（field = 档案字段；bucket = 数值分档函数；archive = 有无档案）
+const ALL_FACETS = [
   { key: 'model', label: '经营模式', field: '经营模式' },
   { key: 'trade', label: '交易方式', field: '交易方式' },
   { key: 'cert', label: '认证信息', field: '认证信息' },
+  { key: 'area', label: '厂房面积', bucket: areaBucket, field: '厂房面积' },
+  { key: 'emp', label: '员工人数', bucket: employeeBucket, field: '员工人数' },
+  { key: 'archive', label: '资料状态' },
 ]
+
+// 条目的档案视角：货源分组用真实档案；仅聊天记录的条目视为「无档案」，
+// 这样它们也参与同一套筛选（只在勾选「无工厂信息」时保留，其余维度下一律被排除）
+function entryInfo(e) { return e.group?.archive?.info || null }
+function entryHasFactory(e) { return (e.group?.field_count || 0) > 0 }
+
+function entryMatchFacet(e, def, selected) {
+  if (!selected.length) return true
+  if (def.key === 'archive') return selected.includes(entryHasFactory(e) ? 'has' : 'none')
+  const info = entryInfo(e)
+  if (def.bucket) return selected.includes(def.bucket(info?.[def.field]))
+  return selected.includes(info?.[def.field] || '')
+}
+
+// 关键词匹配：货源分组走接口拼好的 search_blob；聊天-only 条目只有名称/登录ID可搜
+function entryMatchSearch(e, kw) {
+  if (!kw) return true
+  if (e.group) return matchSearch(e.group.search_blob, kw)
+  return matchSearch(e.chatSearch || '', kw)
+}
+
+// 全部条目 = 货源分组 ∪ 聊天记录供应商（同名合并；聊天-only 的附上可搜索文本）
+const allEntries = computed(() => {
+  const map = new Map()
+  for (const g of groups.value) map.set(g.supplier_name, { name: g.supplier_name, group: g, chat: null, chatSearch: '' })
+  for (const c of chatSuppliers.value) {
+    const key = c.supplier_name || c.display_name || c.login_id
+    if (!key) continue
+    if (map.has(key)) map.get(key).chat = c
+    else map.set(key, { name: key, group: null, chat: c, chatSearch: `${key} ${c.display_name || ''} ${c.login_id || ''}` })
+  }
+  const list = [...map.values()]
+  for (const e of list) {
+    e.lastActivity = Math.max(e.group?.last_activity || 0, e.chat?.last_ts || 0)
+    e.pinned = pinnedSuppliers.value.includes(e.name)
+  }
+  return list
+})
+
+const searchKw = computed(() => searchText.value.trim())
+// 第一步：搜索过滤（facet 计数与最终列表都以这一步为基数）
+const searchedEntries = computed(() => allEntries.value.filter(e => entryMatchSearch(e, searchKw.value)))
+
+// 级联计数：某维度的选项统计基于「通过搜索 + 其他维度已选条件」的条目，
+// 计数 ≥1 的选项才会出现 —— 保证选中某选项后，列表数量和面板数字一致，不会多出无关条目
 const facetDefs = computed(() => {
   const defs = []
-  for (const d of FIELD_FACETS) {
-    const counter = new Map()
-    for (const g of groups.value) {
-      const v = g.archive?.info?.[d.field]
-      if (v) counter.set(v, (counter.get(v) || 0) + 1)
-    }
-    if (counter.size) {
-      defs.push({
-        ...d,
-        options: [...counter.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .map(([value, count]) => ({ value, label: value, count })),
-      })
-    }
-  }
-  const bucketFacet = (key, label, buckets, fn, field) => {
-    const counter = new Map()
-    for (const g of groups.value) {
-      const b = fn(g.archive?.info?.[field])
-      if (b) counter.set(b, (counter.get(b) || 0) + 1)
-    }
-    if (!counter.size) return
-    defs.push({
-      key, label, bucket: key, field,
-      options: buckets.filter(b => counter.has(b.value))
-        .map(b => ({ value: b.value, label: b.label, count: counter.get(b.value) })),
+  for (const def of ALL_FACETS) {
+    const base = searchedEntries.value.filter(e => {
+      for (const other of ALL_FACETS) {
+        if (other.key === def.key) continue
+        const sel = activeFilters.value[other.key] || []
+        if (sel.length && !entryMatchFacet(e, other, sel)) return false
+      }
+      return true
     })
-  }
-  bucketFacet('area', '厂房面积', AREA_BUCKETS, areaBucket, '厂房面积')
-  bucketFacet('emp', '员工人数', EMP_BUCKETS, employeeBucket, '员工人数')
-  const withFactory = groups.value.filter(g => (g.field_count || 0) > 0).length
-  const noFactory = groups.value.length - withFactory
-  if (withFactory && noFactory) {
-    defs.push({
-      key: 'archive', label: '资料状态',
-      options: [
-        { value: 'has', label: '有工厂信息', count: withFactory },
-        { value: 'none', label: '无工厂信息', count: noFactory },
-      ],
-    })
+    let options = []
+    if (def.key === 'archive') {
+      const has = base.filter(entryHasFactory).length
+      const none = base.length - has
+      if (has) options.push({ value: 'has', label: '有工厂信息', count: has })
+      if (none) options.push({ value: 'none', label: '无工厂信息', count: none })
+    } else if (def.bucket) {
+      const counter = new Map()
+      for (const e of base) {
+        const b = def.bucket(entryInfo(e)?.[def.field])
+        if (b) counter.set(b, (counter.get(b) || 0) + 1)
+      }
+      const buckets = def.key === 'area' ? AREA_BUCKETS : EMP_BUCKETS
+      options = buckets.filter(b => counter.has(b.value))
+        .map(b => ({ value: b.value, label: b.label, count: counter.get(b.value) }))
+    } else {
+      const counter = new Map()
+      for (const e of base) {
+        const v = entryInfo(e)?.[def.field]
+        if (v) counter.set(v, (counter.get(v) || 0) + 1)
+      }
+      options = [...counter.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([value, count]) => ({ value, label: value, count }))
+    }
+    if (!options.length) continue
+    // 单选项且覆盖全部条目（未选中时）＝该维度没有区分度，不显示，避免塞入无意义选项
+    const selected = activeFilters.value[def.key] || []
+    if (options.length === 1 && options[0].count === base.length && !selected.length) continue
+    defs.push({ ...def, options })
   }
   return defs
 })
+
 const activeFilterCount = computed(() =>
   Object.values(activeFilters.value).reduce((n, arr) => n + (arr?.length || 0), 0))
 function setFacet(key, values) {
@@ -83,31 +133,14 @@ function clearFacet(key) {
 }
 function clearAllFilters() { activeFilters.value = {} }
 
-function matchFacet(g, def, selected) {
-  if (!selected.length) return true
-  if (def.key === 'archive') {
-    const has = (g.field_count || 0) > 0
-    return selected.includes(has ? 'has' : 'none')
+// 第二步：维度筛选（与 facetDefs 的计数口径完全一致）
+const visibleEntries = computed(() => searchedEntries.value.filter(e => {
+  for (const def of ALL_FACETS) {
+    const selected = activeFilters.value[def.key] || []
+    if (selected.length && !entryMatchFacet(e, def, selected)) return false
   }
-  if (def.bucket === 'area') return selected.includes(areaBucket(g.archive?.info?.['厂房面积']))
-  if (def.bucket === 'emp') return selected.includes(employeeBucket(g.archive?.info?.['员工人数']))
-  const v = g.archive?.info?.[def.field] || ''
-  return selected.includes(v)
-}
-
-// 关键词 + 工厂信息筛选后的供应商分组（搜索文本由接口预先拼好：工厂信息 + 工厂备注 + 商品备注）
-const filteredGroups = computed(() => {
-  const kw = searchText.value.trim()
-  const defs = facetDefs.value
-  return groups.value.filter(g => {
-    if (kw && !matchSearch(g.search_blob, kw)) return false
-    for (const d of defs) {
-      const selected = activeFilters.value[d.key] || []
-      if (selected.length && !matchFacet(g, d, selected)) return false
-    }
-    return true
-  })
-})
+  return true
+}))
 
 // ── 聊天记录（与货源合并展示）──
 const chatSuppliers = ref([])
@@ -162,34 +195,15 @@ async function loadTabOrder() {
 // 当前选中的供应商
 const currentName = ref('')
 const currentGroup = computed(() => groups.value.find(g => g.supplier_name === currentName.value) || null)
-// 合并条目：本地库供应商 ∪ 聊天记录供应商（按名称对齐，聊天-only 的也能显示）
-// 排序：置顶优先；其余按用户选择的模式（最新活动 / 名称）排列。有笔记不再自动置顶。
 const pinnedSuppliers = ref([])
 const sortMode = ref('time')   // time = 最新活动在前 | name = 名称排序
-const mergedEntries = computed(() => {
-  const kw = searchText.value.trim()
-  const map = new Map()
-  for (const g of filteredGroups.value) map.set(g.supplier_name, { name: g.supplier_name, group: g, chat: null })
-  for (const c of chatSuppliers.value) {
-    const key = c.supplier_name || c.display_name || c.login_id
-    if (!key) continue
-    if (map.has(key)) map.get(key).chat = c
-    // 仅聊天记录的供应商（本地库没有货源分组）：同样受搜索词约束
-    else if (matchSearch(`${key} ${c.display_name || ''} ${c.login_id || ''}`, kw)) {
-      map.set(key, { name: key, group: null, chat: c })
-    }
-  }
-  const list = [...map.values()]
-  for (const e of list) {
-    e.lastActivity = Math.max(e.group?.last_activity || 0, e.chat?.last_ts || 0)
-    e.pinned = pinnedSuppliers.value.includes(e.name)
-  }
-  return list.sort((a, b) => {
-    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
-    if (sortMode.value === 'name') return a.name.localeCompare(b.name, 'zh-CN')
-    return b.lastActivity - a.lastActivity
-  })
-})
+// 合并条目的构建在 allEntries（上方，筛选管线入口）；
+// mergedEntries = 最终可见条目（搜索 + 筛选都通过），再按置顶/排序模式排列
+const mergedEntries = computed(() => visibleEntries.value.slice().sort((a, b) => {
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+  if (sortMode.value === 'name') return a.name.localeCompare(b.name, 'zh-CN')
+  return b.lastActivity - a.lastActivity
+}))
 
 async function loadPinned() {
   const { imPinnedSuppliers, imSupplierSortMode } = await browser.storage.local.get(['imPinnedSuppliers', 'imSupplierSortMode'])
