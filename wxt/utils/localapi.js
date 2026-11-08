@@ -186,6 +186,36 @@ function maxOf(values, fallback = null) {
   return m === -Infinity ? fallback : m
 }
 
+// ── 供应商名称归一 / 兼容匹配 ──
+// 客服页抓到的是会话昵称或整段会话头部文本（如「先科金属制品厂 18666603678 (xk0750)」），
+// 详情页存的是公司全名（如「江门市新会区会城先科金属制品厂」），只能靠归一后的包含关系对齐。
+function normSupplierName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[\s\u3000]+/g, '')
+    .replace(/[（）()【】\[\]「」《》<>·.,，、\-_/\\|:：;；'"“”‘’]+/g, '')
+}
+
+// 去掉尾部的电话/账号等数字串，留下公司名主干
+function supplierNameCore(s) {
+  return normSupplierName(s)
+    .replace(/[a-z0-9０-９]+$/g, '')
+    .replace(/(电话|手机|联系|微信|客服|旺旺|地址).*$/, '')
+}
+
+function sameSupplierName(a, b) {
+  const na = normSupplierName(a)
+  const nb = normSupplierName(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  const ca = supplierNameCore(a)
+  const cb = supplierNameCore(b)
+  for (const [x, y] of [[na, nb], [ca, cb], [na, cb], [ca, nb]]) {
+    if (x.length >= 4 && y.length >= 4 && (x.includes(y) || y.includes(x))) return true
+  }
+  return false
+}
+
 // ════════════════════════════════════
 // 路由表
 // ════════════════════════════════════
@@ -826,11 +856,7 @@ async function route(path, method, body, query) {
   if (path === '/api/v1/suppliers/resolve' && method === 'GET') {
     const rawName = String(query.name || '').trim()
     const loginId = String(query.login_id || '').trim()
-    const norm = s => String(s || '')
-      .toLowerCase()
-      .replace(/[\s\u3000]+/g, '')
-      .replace(/[（）()【】\[\]「」《》<>·.,，、\-_/\\]/g, '')
-    const tName = norm(rawName)
+    const tCore = supplierNameCore(rawName)
     const list = await db.all('suppliers')
 
     let best = null
@@ -846,13 +872,11 @@ async function route(path, method, body, query) {
       const hit = list.find(s => s.name === rawName)
       if (hit) take(hit, 'name', 90)
     }
-    if (!best && tName.length >= 4) {
+    if (!best && rawName) {
       for (const s of list) {
-        const n = norm(s.name)
-        if (n.length < 4) continue
-        if (n === tName) { take(s, 'fuzzy', 88); continue }
-        if (!n.includes(tName) && !tName.includes(n)) continue
-        const ratio = Math.min(n.length, tName.length) / Math.max(n.length, tName.length)
+        if (!sameSupplierName(rawName, s.name)) continue
+        const c = supplierNameCore(s.name)
+        const ratio = tCore && c ? Math.min(tCore.length, c.length) / Math.max(tCore.length, c.length) : 0
         take(s, 'fuzzy', 60 + ratio * 20)
       }
     }
@@ -860,8 +884,10 @@ async function route(path, method, body, query) {
       const chats = await db.all('chat_messages')
       const hitChat = chats.find(m =>
         m.supplier_name &&
-        ((loginId && m.login_id === loginId) || (rawName && m.display_name === rawName)) &&
-        m.supplier_name !== rawName
+        !sameSupplierName(m.supplier_name, rawName) &&
+        ((loginId && m.login_id === loginId) ||
+          (rawName && sameSupplierName(m.display_name, rawName)) ||
+          (rawName && sameSupplierName(m.supplier_name, rawName)))
       )
       if (hitChat) {
         const s = list.find(x => x.name === hitChat.supplier_name)
@@ -1190,7 +1216,32 @@ async function route(path, method, body, query) {
       db.all('products'), db.all('view_records'), db.all('appear_records'),
       db.all('comments'), db.all('suppliers'), db.all('chat_messages'),
     ])
-    const prods = products.filter(p => p.supplier_name === name)
+    const sup = suppliers.find(s => s.name === name)
+      || suppliers.find(s => sameSupplierName(s.name, name))
+      || null
+    // 别名集合：同一供应商可能以公司全名 / 会话昵称 / 整段会话头部文本 / 历史登录 ID 出现
+    const aliasNames = new Set([name])
+    const loginIds = new Set(sup?.loginIds || [])
+    for (const s of suppliers) {
+      if (s.name === name || sameSupplierName(s.name, name)) {
+        aliasNames.add(s.name)
+        for (const id of s.loginIds || []) loginIds.add(id)
+      }
+    }
+    const hitCache = new Map()
+    const nameHit = v => {
+      if (!v) return false
+      if (hitCache.has(v)) return hitCache.get(v)
+      let hit = aliasNames.has(v) || loginIds.has(v)
+      if (!hit) {
+        for (const a of aliasNames) {
+          if (sameSupplierName(v, a)) { hit = true; break }
+        }
+      }
+      hitCache.set(v, hit)
+      return hit
+    }
+    const prods = products.filter(p => nameHit(p.supplier_name))
     const offerIds = new Set(prods.map(p => p.offer_id))
     const views = records.filter(r => offerIds.has(r.offer_id))
     const apps = appears.filter(a => offerIds.has(a.offer_id))
@@ -1205,12 +1256,17 @@ async function route(path, method, body, query) {
       if (c.kind === 'product' && offerIds.has(c.target)) {
         if (!productNotes.has(c.target)) productNotes.set(c.target, [])
         productNotes.get(c.target).push(stripHtml(c.text || ''))
-      } else if (c.kind === 'supplier' && c.target === name) {
+      } else if (c.kind === 'supplier' && nameHit(c.target)) {
         supplierNotes.push(stripHtml(c.text || ''))
       }
     }
-    const sup = suppliers.find(s => s.name === name) || null
-    const myChats = chats.filter(m => m.supplier_name === name || m.display_name === name || m.login_id === name)
+    const chatHit = m => nameHit(m.supplier_name) || nameHit(m.display_name) || nameHit(m.login_id)
+    let myChats = chats.filter(chatHit)
+    // 同一会话的记录可能被挂在不同名称下，命中一条就带上整段会话
+    const convCodes = new Set(myChats.map(m => m.conversation_code).filter(Boolean))
+    if (convCodes.size) {
+      myChats = chats.filter(m => chatHit(m) || (m.conversation_code && convCodes.has(m.conversation_code)))
+    }
     const { messages: keptChats, stats: noise } = filterChatForAi(myChats, { maxMessages: 300, maxChars: 12000 })
     const productList = prods
       .map(p => ({
@@ -1226,7 +1282,7 @@ async function route(path, method, body, query) {
     return ok({
       name,
       archive: archiveSummaryOf(sup),
-      login_ids: sup?.loginIds || [],
+      login_ids: [...loginIds],
       totals: {
         product_count: prods.length,
         view_count: views.length,
@@ -1548,6 +1604,21 @@ function hasCommentContent(html) {
 
 // 内置版本更新公告（与用户在 UpdateEditor 中手动发布的记录合并展示）
 const BUILTIN_UPDATES = [
+  {
+    id: 'builtin-1.2.2', version: '1.2.2', title: 'AI 分析 / 供应商对话 / 客服 AI 页签 + 聊天记录修复', status: 'published',
+    created_at: '2026-11-08T06:40:00.000Z', created_by: 'Conley',
+    content: '<ul>'
+      + '<li>【新增了什么】管理后台顶层「AI 分析」：「整体分析」把供应商、商品、浏览、聊天与噪音过滤结果汇总成结论/要点/风险/下一步；「定向检索」先用本地 BM25 从档案、备注、商品标题和聊天记录召回片段，只把命中片段交给模型，可选硅基流动 Rerank 重排</li>'
+      + '<li>【新增了什么】供应商 AI 对话：后台「我的货源 · AI」与客服页第 5 个页签「AI」共用同一段多轮对话，本机持久化，两边实时同步；支持快捷问题、停止生成、失败重试、复制与清空</li>'
+      + '<li>【新增了什么】AI 接口用户自带 Key：预设商汤日日新 / OpenAI / DeepSeek / 自定义，Key 只存本机 `storage.local`，不上传；Rerank 单独配置、默认关闭</li>'
+      + '<li>【新增了什么】聊天噪音过滤：系统提示、自动回复、寒暄、短句、重复消息只在分析与展示时过滤，原始记录完整保留</li>'
+      + '<li>【新增了什么】1688 页面加载提示改用 Element Plus 通知：单行紧凑卡片，显示「已加载 N 个商品数据（本页/本店 M 个商品）」，几秒后自动消失，多条向下排队</li>'
+      + '<li>【修复了什么】客服 AI 显示聊天 0 条、误判供应商没回复：供应商名归一化 + 登录 ID/别名双向匹配，聊天按会话归并；会话名不精确时反查供应商库兜底</li>'
+      + '<li>【修复了什么】「没有」「可以」这类两字中文答复不再被当噪音过滤，AI 能看到对方真实回应</li>'
+      + '<li>【修复了什么】商汤思考模式耗尽输出导致空正文：默认关闭 thinking，模型不接受时自动去掉参数；空正文时自动调大 max_tokens 重试</li>'
+      + '<li>【修复了什么】供应商问答改为只读聊天记录：先给一句话结论，再列事实与下一步动作；只有明确询问工厂/规模/认证等信息时才附档案</li>'
+      + '</ul>',
+  },
   {
     id: 'builtin-1.2.1', version: '1.2.1', title: '修复筛选：结果与计数一致，剔除无内容选项', status: 'published',
     created_at: '2026-11-07T14:50:00.000Z', created_by: 'Conley',

@@ -42,7 +42,8 @@ export function classifyChat(messages) {
       reason = 'auto'
     } else if (text && text.length <= 12 && GREETING_RE.test(text)) {
       reason = 'greeting'
-    } else if (text && text.length <= 2 && !/\d/.test(text) && !media && !link) {
+    } else if (text && text.length <= 2 && !/[\u4e00-\u9fa5]/.test(text) && !/\d/.test(text) && !media && !link) {
+      // 只滤纯符号/表情的短内容；「没有」「可以」「有」这类中文短回复就是有效答复，不能丢
       reason = 'short'
     } else if (text && text === prevText) {
       // 同一句紧邻重复（自动回复常见）

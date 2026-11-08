@@ -76,22 +76,57 @@ ${ANALYSIS_JSON_INSTRUCTION}`
 }
 
 // ── 单供应商对话（AI 分析页签的聊天形式）──
-const CHAT_RULES = `你正在用对话方式帮采购员分析这家供应商，回答要像一位务实的采购同事：先给结论，再给依据。
+// 默认只喂聊天记录：采购员问「聊了什么」时，档案/浏览数据会干扰回答、把结论拉长。
+// 只有问题明确涉及工厂信息时才附带档案。
+const ARCHIVE_QUESTION_RE = /(档案|工厂|厂家|规模|产能|实力|认证|经营模式|交易方式|员工|厂房|面积|成立|年限|资质)/
+
+const CHAT_RULES = `你是采购员的聊天记录助手。任务只有一件：把这家供应商的旺旺聊天讲清楚，并告诉采购员接下来怎么做。
 
 规则：
-1. 只依据下方资料回答；资料里没有的，明确说「资料未提及」，不要编造。
-2. 引用价格、起订量、交期、面积、人数等数字时原样引用，不改写、不换算。
-3. 关键结论标注来源：【档案】【商品】【我的备注】【聊天 MM-DD HH:mm】；由多条信息推断出的结论标注【推测】。
-4. 档案与聊天冲突时并列写出双方说法，提示「建议核实」，不要自行选边。
-5. 用简洁中文回答，可以分点，不要输出 JSON、表格或 Markdown 代码块。
-6. 用户问的内容超出这家供应商的数据范围时，先说明，再给通用建议并标注【通用建议】。`
+1. 默认只依据【聊天记录】回答。不要引用或提及供应商档案、经营模式、厂房面积、员工人数、认证、商品浏览次数、我的备注；聊天里没有的内容不要补。
+2. 只有用户明确询问工厂规模、认证、经营模式等档案信息时，才可以使用下方【档案信息】；此时只回答被问到的点，不要扩散到其他资料。
+3. 回答要短：先用一句话说清聊了什么；再用 1~5 条列关键信息；必要时用 1~3 条「接下来」给出可执行动作。信息少就少写，不要凑字数。
+4. 每条只写事实和动作：报价、材质、规格、起订量、交期、承诺、分歧、待确认事项；数字原样引用，不改写、不换算。
+5. 不要写「结论」「依据」「风险」「综合评估」这类大标题，不要做「是否适合合作」的长篇判断，除非用户明确要求评估。
+6. 界面是纯文本：禁止使用 **加粗**、# 标题、表格、代码块、JSON 等 Markdown 标记；分点用「1. 2. 3.」，一条一行。
+7. 引用聊天时在句末用【聊天 02-11】这种短标注，不要标注【档案】【商品】。
+8. 聊天里没提到的，直接说「聊天里没提」，不要推测。`
 
-export function buildSupplierChatSystem(ctx) {
+function chatDataBlock(ctx) {
+  const t = ctx.totals || {}
+  const noise = ctx.noise || {}
+  const transcript = ctx.transcript || '（没有可用的聊天记录）'
+  const range = t.first_chat_at || t.last_chat_at
+    ? `${fmtTime(t.first_chat_at)} ~ ${fmtTime(t.last_chat_at)}`
+    : '无'
+  const filtered = noise.filtered ? `（已过滤系统提示/寒暄/重复 ${noise.filtered} 条）` : ''
+
+  // 只把聊天里真正出现过的商品标题带上，帮助理解商品卡片；不带浏览数、备注等附加信息
+  const mentioned = []
+  const seen = new Set()
+  for (const p of ctx.products || []) {
+    if (!p.offer_id || seen.has(p.offer_id) || !transcript.includes(p.offer_id)) continue
+    seen.add(p.offer_id)
+    mentioned.push(`- ${p.title || '(无标题)'}（商品 ${p.offer_id}）`)
+  }
+
+  return `【供应商】${ctx.name}
+【聊天范围】${range}｜有效 ${t.chat_kept || 0} 条${filtered}
+
+【聊天记录】
+${transcript}${mentioned.length ? `\n\n【聊天里出现的商品】\n${mentioned.slice(0, 10).join('\n')}` : ''}`
+}
+
+export function buildSupplierChatSystem(ctx, { question = '' } = {}) {
+  const needArchive = ARCHIVE_QUESTION_RE.test(question)
+  const archive = needArchive
+    ? `\n\n【档案信息（仅用于回答用户本次明确询问的工厂信息）】\n${archiveLines(ctx.archive)}`
+    : ''
   return `${CHAT_RULES}
 
-以下是这家供应商的全部可用资料（聊天记录已过滤系统提示、自动回复、寒暄和重复内容）：
+以下是这家供应商的聊天记录（已过滤系统提示、自动回复、寒暄和重复内容）：
 
-${supplierDataBlock(ctx)}`
+${chatDataBlock(ctx)}${archive}`
 }
 
 // ── 全局数据分析 ──

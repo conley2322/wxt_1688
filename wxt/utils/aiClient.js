@@ -129,17 +129,22 @@ function emptyResponseError(data, cfg) {
   if (usage.completion_tokens != null) bits.push(`输出 tokens ${usage.completion_tokens}`)
   else if (usage.total_tokens != null) bits.push(`总 tokens ${usage.total_tokens}`)
   const hint = finish === 'length'
-    ? '输出被上限截断，请调大输出上限或换更快的模型'
+    ? '思考占满了输出配额（已自动调大上限重试仍失败），请换非推理模型'
     : hasReasoning
-      ? '思考占满了输出配额，请调大输出上限或换非推理模型'
+      ? '模型只返回了思考内容（已自动调大上限重试仍失败），请换非推理模型'
       : '请检查模型名称是否正确，或换一个模型试'
   return `AI 接口返回为空（${bits.join('，')}）：${hint}`
 }
 
-export async function chatComplete({ system, user, messages, maxTokens = 2000, temperature, timeoutMs = 120000, signal } = {}) {
+export async function chatComplete({ system, user, messages, maxTokens = 2000, temperature, thinking, timeoutMs = 120000, signal } = {}) {
   const cfg = await getAiConfig()
   if (!isAiConfigured(cfg)) throw new Error('尚未配置 AI 接口，请先到「系统设置」填写接口地址、API Key 和模型')
   const url = endpointOf(cfg.baseUrl)
+  // 商汤思考模式与正文共用 max_tokens，默认思考很容易把配额全耗在推理上、正文为空。
+  // 本扩展的总结/问答不需要深度思考，所以默认关闭；thinking: 'enabled' 可显式开启。
+  let useThinkingParam = detectProvider(cfg.baseUrl) === 'sensenova'
+  const thinkingType = thinking === 'enabled' ? 'enabled' : 'disabled'
+  const nextTokens = n => Math.min(Math.max(n * 2, 4096), 12288)
 
   // 支持直接传对话消息数组（多轮聊天），也兼容原来的 system + user
   const msgList = Array.isArray(messages) && messages.length
@@ -163,7 +168,14 @@ export async function chatComplete({ system, user, messages, maxTokens = 2000, t
     else signal.addEventListener('abort', onAbort, { once: true })
   }
   try {
-    const request = async (list) => {
+    const request = async (list, tokens) => {
+      const payload = {
+        model: cfg.model,
+        temperature: temperature ?? cfg.temperature,
+        max_tokens: tokens,
+        messages: list,
+      }
+      if (useThinkingParam) payload.thinking = { type: thinkingType }
       let res
       try {
         res = await fetch(url, {
@@ -172,12 +184,7 @@ export async function chatComplete({ system, user, messages, maxTokens = 2000, t
             'Content-Type': 'application/json',
             Authorization: `Bearer ${cfg.apiKey}`,
           },
-          body: JSON.stringify({
-            model: cfg.model,
-            temperature: temperature ?? cfg.temperature,
-            max_tokens: maxTokens,
-            messages: list,
-          }),
+          body: JSON.stringify(payload),
           signal: ctrl.signal,
         })
       } catch (e) {
@@ -194,19 +201,47 @@ export async function chatComplete({ system, user, messages, maxTokens = 2000, t
       return data
     }
 
-    let data = await request(msgList)
+    // 个别模型不接受 thinking 参数会直接 400，此时去掉该参数重试
+    const call = async (list, tokens) => {
+      try {
+        return await request(list, tokens)
+      } catch (e) {
+        if (useThinkingParam && /400/.test(e.message)) {
+          console.warn('[aiClient] 模型不接受 thinking 参数，去掉后重试：', e.message)
+          useThinkingParam = false
+          return request(list, tokens)
+        }
+        throw e
+      }
+    }
+
+    let tokens = maxTokens
+    let usedList = msgList
+    let data = await call(usedList, tokens)
     let answer = contentOf(data).trim()
     // 少数 OpenAI 兼容接口对 system 角色处理异常（返回 200 但正文为空）：
     // 去掉 system 角色、合并成单条用户消息重试一次。
     if (!answer && msgList.some(m => m.role === 'system')) {
       console.warn('[aiClient] 首次返回空正文，改为单条用户消息重试', data)
-      const merged = [{
+      usedList = [{
         role: 'user',
         content: msgList
           .map(m => (m.role === 'system' ? m.content : `[${m.role === 'assistant' ? '助手' : '用户'}] ${m.content}`))
           .join('\n\n'),
       }]
-      data = await request(merged)
+      tokens = nextTokens(tokens)
+      data = await call(usedList, tokens)
+      answer = contentOf(data).trim()
+    }
+    // 思考模型可能把输出配额全用在推理上（finish_reason=length 且正文为空），逐级调大上限
+    for (let i = 0; i < 2 && !answer; i++) {
+      const choice = data?.choices?.[0]
+      const finish = choice?.finish_reason
+      const hasReasoning = !!(choice?.message?.reasoning_content || choice?.message?.reasoning)
+      if (finish !== 'length' && !hasReasoning) break
+      tokens = nextTokens(tokens)
+      console.warn('[aiClient] 输出配额被思考占用，调大上限重试', { finish, tokens })
+      data = await call(usedList, tokens)
       answer = contentOf(data).trim()
     }
     if (!answer) {

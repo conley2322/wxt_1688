@@ -261,10 +261,10 @@ async function loadSupplierStats(name) {
 
 // ── 供应商 AI 对话（每个供应商保留一段独立对话，与客服面板共用同一份存储）──
 const AI_QUICK_QUESTIONS = [
-  '综合介绍一下这家供应商',
-  '价格、起订量和账期怎么样',
-  '交期、产能和定制能力如何',
-  '有哪些风险和资料缺口',
+  '总结一下和这家供应商聊了什么',
+  '对方报了什么价、什么条件',
+  '有哪些承诺没落实、该追问什么',
+  '接下来该怎么跟进',
 ]
 
 const aiReady = ref(false)
@@ -382,7 +382,7 @@ async function sendAiMessage(preset, opts = {}) {
   try {
     const res = await api(`/api/v1/ai/context/supplier?name=${encodeURIComponent(name)}`)
     if (res.code !== 200) throw new Error(res.message || '读取供应商数据失败')
-    const system = buildSupplierChatSystem(res.data)
+    const system = buildSupplierChatSystem(res.data, { question: text })
     // 每次从最新状态取历史，避免等待期间外部写入导致引用过期
     const history = (aiChats.value[name] || [])
       .filter(m => !m.error && m.text)
@@ -958,8 +958,7 @@ async function deleteSupplier(name) {
               <span class="ai-head-title">AI 采购助手</span>
               <span class="ai-head-sub">
                 <template v-if="currentChatSupplier">聊天 {{ currentChatSupplier.count }} 条</template>
-                <template v-if="currentGroup"> · 商品 {{ currentGroup.product_count }} 件</template>
-                · 已过滤系统/自动回复/寒暄/重复
+                · 只读过滤后的聊天记录
               </span>
             </div>
             <div class="ai-head-actions">
@@ -975,8 +974,8 @@ async function deleteSupplier(name) {
             </div>
 
             <div v-else-if="!aiMessages.length" class="ai-chat-welcome">
-              <div class="acw-title">和 AI 聊聊这家供应商</div>
-              <div class="acw-sub">已读取档案、商品浏览、我的备注和过滤后的聊天记录；AI 只依据这些资料回答，缺什么会直接说「资料未提及」。</div>
+              <div class="acw-title">聊聊这家供应商的聊天记录</div>
+              <div class="acw-sub">默认只读过滤后的聊天记录：先讲聊了什么，再给下一步动作。只有明确问工厂规模、认证等信息时才会参考档案。</div>
               <div class="acw-chips">
                 <span v-for="q in AI_QUICK_QUESTIONS" :key="q" class="acw-chip" @click="sendAiMessage(q)">{{ q }}</span>
               </div>
@@ -1014,7 +1013,7 @@ async function deleteSupplier(name) {
                 :rows="2"
                 resize="none"
                 :disabled="aiAnyBusy"
-                placeholder="问这家供应商：价格、起订量、交期、定制能力、风险…（Enter 发送，Shift+Enter 换行）"
+                placeholder="问聊天内容：报价、起订量、交期、承诺、该追问什么…（Enter 发送，Shift+Enter 换行）"
                 @keydown.enter="onAiEnter"
               />
               <el-button type="primary" :loading="aiBusy" :disabled="!aiInput.trim() || aiAnyBusy" @click="sendAiMessage()">发送</el-button>

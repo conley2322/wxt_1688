@@ -378,7 +378,7 @@ async function sendAiMessage(preset, opts = {}) {
   try {
     const res = await api(`/api/v1/ai/context/supplier?name=${encodeURIComponent(key)}`)
     if (res.code !== 200) throw new Error(res.message || '读取会话资料失败')
-    const system = buildSupplierChatSystem(res.data)
+    const system = buildSupplierChatSystem(res.data, { question: text })
     const history = (aiChats.value[key] || [])
       .filter(m => !m.error && m.text)
       .slice(-12)
@@ -701,7 +701,7 @@ watch(aiKey, () => {
             <span class="ai-link" @click="openAiSettings">打开设置</span>
           </div>
           <div v-else-if="!aiMessages.length && !aiBusy" class="ai-empty">
-            <div class="ai-empty-title">可以直接问这家供应商的资料和聊天内容</div>
+            <div class="ai-empty-title">直接问这家供应商的聊天内容，回答只基于聊天记录</div>
             <div class="ai-empty-sub">对话保存在本机，后台「我的货源 · AI」能看到同一段对话</div>
             <div class="ai-chips">
               <span v-for="q in AI_QUICK" :key="q" class="ai-chip" @click="sendAiMessage(q)">{{ q }}</span>

@@ -202,6 +202,16 @@ async function resolveSupplierName(bare, displayName) {
       loginIdCache.set(bare, name)
     }
   } catch {}
+  // by-loginid 未命中时，用会话名反查：处理「会话昵称 / 整段会话头部文本」与公司全名不一致
+  if (!name && displayName) {
+    try {
+      const res = await dataApi(`/api/v1/suppliers/resolve?name=${encodeURIComponent(displayName)}`)
+      if (res.code === 200 && res.data?.name) {
+        name = res.data.name
+        loginIdCache.set(bare, name)
+      }
+    } catch {}
+  }
   if (!name && displayName) name = displayName
   return name
 }

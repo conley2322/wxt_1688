@@ -1,6 +1,9 @@
 // box-content.content.js — 单机版：商品卡片注入（数据全部来自本地 IndexedDB）
 import { createApp, reactive } from 'vue'
 import { createPinia } from 'pinia'
+import { ElNotification } from 'element-plus'
+import 'element-plus/theme-chalk/base.css'
+import 'element-plus/theme-chalk/el-notification.css'
 import App from '../entrypoints/box/App.vue'
 import { api as dataApi } from '../utils/dataClient.js'
 import { setupIm } from '../entrypoints/im/inject.js'
@@ -85,13 +88,39 @@ export default defineContentScript({
     const pendingShopOffers = new Set()
     const pinia = createPinia()
 
-    // ── Toast 提示 ──
-    function showToast(msg) {
-      const el = document.createElement('div')
-      el.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99999;background:#c9975c;color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,PingFang SC,Arial,sans-serif;box-shadow:0 4px 12px rgba(0,0,0,0.15);transition:opacity 0.3s;pointer-events:none;'
-      el.textContent = msg
-      document.body.appendChild(el)
-      setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300) }, 2000)
+    // ── 页面加载提示（Element Plus Notification）──
+    // 每条消息独立弹出、几秒后自动消失；同时出现多条时由 Element Plus 自动向下排队。
+    const pageLabel = isListHost ? '本页' : '本店'
+    const scannedOfferIds = new Set()
+    const loadedOfferIds = new Set()
+
+    function ensureNotifyStyle() {
+      if (document.getElementById('alocs-el-notify-style')) return
+      const style = document.createElement('style')
+      style.id = 'alocs-el-notify-style'
+      // 把 Element Plus 默认通知压成单行小卡片（默认是 82px 高的标题+正文两行）
+      style.textContent = `
+.alocs-page-notify{z-index:2147483647!important;width:auto!important;min-width:200px;max-width:min(380px,calc(100vw - 24px));padding:10px 30px 10px 12px!important;border:none!important;border-radius:10px!important;background:rgba(255,255,255,.94)!important;-webkit-backdrop-filter:blur(12px) saturate(160%);backdrop-filter:blur(12px) saturate(160%);box-shadow:0 10px 28px -8px rgba(15,23,42,.22),0 2px 6px rgba(15,23,42,.06)!important}
+.alocs-page-notify .el-notification__icon{width:18px!important;height:18px!important;font-size:18px!important;align-self:center}
+.alocs-page-notify .el-notification__group{margin:0 0 0 8px!important;display:flex;align-items:center;min-height:18px}
+.alocs-page-notify .el-notification__title{display:none!important}
+.alocs-page-notify .el-notification__content{margin:0!important;font-size:13px;line-height:18px;color:#334155;white-space:pre-line}
+.alocs-page-notify .el-notification__closeBtn{top:50%!important;right:10px!important;transform:translateY(-50%);font-size:13px!important}
+`
+      document.head.appendChild(style)
+    }
+
+    function notify(message, { type = 'success', duration = 3000 } = {}) {
+      ensureNotifyStyle()
+      ElNotification({
+        title: 'ALOCS 1688',
+        message,
+        type,
+        duration,
+        position: 'top-right',
+        offset: 12,
+        customClass: 'alocs-page-notify',
+      })
     }
 
     // 共享的本地数据缓存（offer_id → 卡片信息）
@@ -119,6 +148,11 @@ export default defineContentScript({
         return
       }
       lastRequestFingerprint = fingerprint
+      for (const id of newIds) scannedOfferIds.add(id)
+      // 只在页面首次读取时提示「正在读取」，后续滚动加载只提示结果，避免刷屏
+      if (loadedOfferIds.size === 0) {
+        notify(`正在读取${pageLabel}商品数据…`, { type: 'info', duration: 2000 })
+      }
 
       // 只透传新商品的供应商名
       const newSupplierMap = {}
@@ -135,15 +169,20 @@ export default defineContentScript({
         if (res.code === 200) {
           Object.assign(batchCache, res.data)
           const count = Object.keys(res.data).length
+          for (const id of Object.keys(res.data)) loadedOfferIds.add(id)
           console.log(`[box:${tag}] 本地数据读取成功：命中 ${count} 个商品`)
-          if (count > 0) showToast(`已加载 ${count} 个商品数据`)
+          if (count > 0) {
+            notify(`已加载 ${loadedOfferIds.size} 个商品数据（${pageLabel} ${scannedOfferIds.size} 个商品）`)
+          }
         } else {
           lastRequestFingerprint = ''
           console.error(`[box:${tag}] 本地数据读取失败：`, res.message)
+          notify(`读取商品数据失败：${res.message || '未知错误'}`, { type: 'error', duration: 4000 })
         }
       } catch (e) {
         lastRequestFingerprint = ''
         console.error(`[box:${tag}] 本地数据读取异常:`, e)
+        notify(`读取商品数据失败：${e.message || e}`, { type: 'error', duration: 4000 })
       }
     }
 
@@ -405,7 +444,7 @@ export default defineContentScript({
         console.log(`[box:list] 本轮新挂载 ${mounted} 张卡片`)
       } else if (matched === 0 && !adaptWarned) {
         adaptWarned = true
-        showToast('ALOCS 插件：1688 页面结构疑似改版，box 未能挂载，请反馈更新插件')
+        notify('1688 页面结构疑似改版，box 未能挂载，请反馈更新插件', { type: 'warning', duration: 6000 })
         console.error('[box:list] ⚠️ 1688 页面结构疑似改版：常规规则与埋点兜底均未找到商品卡片，box 适配失效')
       }
     }
