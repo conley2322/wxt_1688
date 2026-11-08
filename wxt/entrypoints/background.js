@@ -3,8 +3,10 @@
 // 2. remote-sync：多人模式同步（推送共享数据 + 拉取他人数据），按设置自动或仅手动
 import { handle } from '../utils/localapi.js'
 import { syncOnce } from '../utils/remoteClient.js'
+import { chatComplete } from '../utils/aiClient.js'
 
 const ALARM_NAME = 'alocs-sync'
+const aiCtrls = new Map()
 
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -15,6 +17,22 @@ export default defineBackground(() => {
     if (message?.type === 'remote-sync') {
       safeSync().then(data => sendResponse({ code: 200, data }))
         .catch(e => sendResponse({ code: 500, message: e.message }))
+      return true
+    }
+    // content script（旺旺客服面板）不能直接跨域调 AI，统一由 background 转发
+    if (message?.type === 'ai-chat') {
+      const requestId = message.requestId || ''
+      const ctrl = new AbortController()
+      if (requestId) aiCtrls.set(requestId, ctrl)
+      chatComplete({ ...(message.payload || {}), signal: ctrl.signal })
+        .then(text => sendResponse({ code: 200, data: text }))
+        .catch(e => sendResponse({ code: 500, message: e.message }))
+        .finally(() => { if (requestId) aiCtrls.delete(requestId) })
+      return true
+    }
+    if (message?.type === 'ai-abort') {
+      aiCtrls.get(message.requestId)?.abort()
+      sendResponse({ code: 200 })
       return true
     }
   })

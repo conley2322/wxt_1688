@@ -4,6 +4,8 @@
 
 import { db, uid, getProfile, saveProfile, storageInfo, getQuotaMB, setQuotaMB, cleanupIfNeeded, exportData, importData, clearStore, clearProducts, pruneStore, STORES } from './localdb.js'
 import { stripHtml, joinSearch, countFactoryFields, matchSearch } from './factoryInfo.js'
+import { filterChatForAi, classifyChat, formatChatTranscript } from './chatFilter.js'
+import { retrieveSuppliers, invalidateAiIndex } from './aiSearch.js'
 
 const DAY = 86400000
 
@@ -111,6 +113,79 @@ function othersDailyForProduct(snap, offer_id, selfToken) {
   return daily
 }
 
+// 供应商活跃排行：按「看过的商品」聚合到供应商（没看过的供应商不进排行）
+// 概览首页与分页接口共用，保证两处口径与排序完全一致
+function aggregateSuppliers(products, records, appears) {
+  const viewCount = {}, firstView = {}, lastView = {}, appearCount = {}
+  for (const r of records) {
+    viewCount[r.offer_id] = (viewCount[r.offer_id] || 0) + 1
+    if (!firstView[r.offer_id] || r.viewed_at < firstView[r.offer_id]) firstView[r.offer_id] = r.viewed_at
+    if (!lastView[r.offer_id] || r.viewed_at > lastView[r.offer_id]) lastView[r.offer_id] = r.viewed_at
+  }
+  for (const a of appears) appearCount[a.offer_id] = (appearCount[a.offer_id] || 0) + 1
+  const supMap = new Map()
+  for (const p of products) {
+    if (!viewCount[p.offer_id]) continue
+    const name = p.supplier_name || '未知供应商'
+    let s = supMap.get(name)
+    if (!s) {
+      s = { name, product_count: 0, view_count: 0, appear_count: 0, first_view_at: null, last_view_at: null }
+      supMap.set(name, s)
+    }
+    s.product_count++
+    s.view_count += viewCount[p.offer_id]
+    s.appear_count += appearCount[p.offer_id] || 0
+    if (!s.first_view_at || firstView[p.offer_id] < s.first_view_at) s.first_view_at = firstView[p.offer_id]
+    if (!s.last_view_at || lastView[p.offer_id] > s.last_view_at) s.last_view_at = lastView[p.offer_id]
+  }
+  return [...supMap.values()].sort((a, b) => b.view_count - a.view_count || b.last_view_at - a.last_view_at)
+}
+
+// ── AI 分析辅助：档案摘要 / 取值计数 / 截断 ──
+function archiveSummaryOf(supplier) {
+  const a = supplier?.archive_info || {}
+  const out = {}
+  if (a['经营模式']) out.model = String(a['经营模式']).slice(0, 60)
+  if (a['交易方式']) out.trade = String(a['交易方式']).slice(0, 60)
+  if (a['认证信息']) out.cert = String(a['认证信息']).slice(0, 60)
+  if (a['厂房面积']) out.area = String(a['厂房面积']).slice(0, 60)
+  if (a['员工人数']) out.employees = String(a['员工人数']).slice(0, 60)
+  if (a['主营产品']) out.products = String(a['主营产品']).slice(0, 80)
+  if (a['主营行业']) out.industry = String(a['主营行业']).slice(0, 80)
+  if (supplier?.year) out.year = String(supplier.year).slice(0, 30)
+  return out
+}
+
+function topCounts(values, limit = 8) {
+  const map = new Map()
+  for (const v of values) {
+    const k = String(v || '').trim()
+    if (!k) continue
+    map.set(k, (map.get(k) || 0) + 1)
+  }
+  return [...map.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([value, count]) => ({ value, count }))
+}
+
+function clip(text, n) {
+  const s = String(text || '')
+  return s.length > n ? s.slice(0, n) + '…' : s
+}
+
+// 大数组求极值不能用 spread（参数个数有上限，数据一多会栈溢出）
+function minOf(values, fallback = null) {
+  let m = Infinity
+  for (const v of values) if (v < m) m = v
+  return m === Infinity ? fallback : m
+}
+function maxOf(values, fallback = null) {
+  let m = -Infinity
+  for (const v of values) if (v > m) m = v
+  return m === -Infinity ? fallback : m
+}
+
 // ════════════════════════════════════
 // 路由表
 // ════════════════════════════════════
@@ -153,6 +228,7 @@ async function route(path, method, body, query) {
     } else {
       return { code: 400, message: '未知的数据类型: ' + store }
     }
+    invalidateAiIndex()
     return ok(await storageInfo())
   }
   // 保留最近 N 天的流水（浏览/出现/操作日志），只删更早的：POST /api/v1/local/prune  { days }
@@ -163,13 +239,16 @@ async function route(path, method, body, query) {
       deleted[s] = await pruneStore(s, days)
     }
     await log('POST /api/v1/local/prune', `保留最近 ${days} 天流水，清理浏览 ${deleted.view_records}/出现 ${deleted.appear_records}/日志 ${deleted.operation_logs} 条`)
+    invalidateAiIndex()
     return ok({ deleted, ...(await storageInfo()) })
   }
   if (path === '/api/v1/local/export' && method === 'POST') {
     return ok(await exportData())
   }
   if (path === '/api/v1/local/import' && method === 'POST') {
-    return ok(await importData(body.data, body.mode || 'merge'))
+    const info = await importData(body.data, body.mode || 'merge')
+    invalidateAiIndex()
+    return ok(info)
   }
 
   // ── 商品浏览（win 详情页每次进入调用）──
@@ -177,6 +256,7 @@ async function route(path, method, body, query) {
     const { offer_id, title, main_img_url, supplier_name } = body
     await upsertProduct(offer_id, title, main_img_url, supplier_name)
     await db.add('view_records', { offer_id, viewed_at: Date.now() })
+    invalidateAiIndex()
     const records = (await db.all('view_records')).filter(r => r.offer_id === offer_id)
     const p = await getProfile()
     return ok({
@@ -266,7 +346,7 @@ async function route(path, method, body, query) {
         view_count: views.length,
         comment_count: cmts.length,
         i_have_viewed: views.length > 0,
-        last_viewed_at: views.length ? Math.max(...views.map(v => v.viewed_at)) : null,
+        last_viewed_at: views.length ? maxOf(views.map(v => v.viewed_at)) : null,
         my_views_timeline: timeline,
         supplier_name: supplierName,
         supplier_viewed_count: supplierViewedCount,
@@ -408,9 +488,8 @@ async function route(path, method, body, query) {
         field_count: countFactoryFields(archiveInfo),
         search_blob: joinSearch(blobParts),
         last_activity: Math.max(
-          ...prods.map(p => p.last_viewed_at || 0),
-          ...supCmts.map(c => new Date(c.updated_at || c.created_at).getTime()),
-          0
+          maxOf(prods.map(p => p.last_viewed_at || 0), 0),
+          maxOf(supCmts.map(c => new Date(c.updated_at || c.created_at).getTime()), 0)
         ),
       }
     })
@@ -439,19 +518,13 @@ async function route(path, method, body, query) {
   if (mProductDelete && method === 'DELETE') {
     const offer_id = decodeURIComponent(mProductDelete[1])
     await purgeProduct(offer_id)
+    invalidateAiIndex()
     await log('DELETE /api/v1/products/:id', `删除了商品 ${offer_id} 及其全部数据`)
     return ok(null)
   }
 
-  // ── 批量删除商品 ──  // POST /api/v1/products/batch-delete
-  if (path === '/api/v1/products/batch-delete' && method === 'POST') {
-    const ids = [...new Set(body.offer_ids || [])]
-    for (const id of ids) await purgeProduct(id)
-    await log('POST /api/v1/products/batch-delete', `批量删除了 ${ids.length} 个商品`)
-    return ok({ deleted: ids.length })
-  }
-
-  // ── 删除供应商（连带名下商品全部数据 + 供应商评论）──  // DELETE /api/v1/suppliers/:name
+  // ── 删除供应商（连带名下商品全部数据 + 供应商评论 + 旺旺聊天记录）──  // DELETE /api/v1/suppliers/:name
+  // name 可能是供应商名，也可能是聊天-only 条目的显示名/登录 ID，三者都要匹配
   const mSupplierDelete = path.match(/^\/api\/v1\/suppliers\/([^/]+)$/)
   if (mSupplierDelete && method === 'DELETE') {
     const name = decodeURIComponent(mSupplierDelete[1])
@@ -460,7 +533,10 @@ async function route(path, method, body, query) {
     for (const id of ids) await purgeProduct(id)
     await db.deleteWhere('comments', c => c.kind === 'supplier' && c.target === name)
     await db.delete('suppliers', name)
-    await log('DELETE /api/v1/suppliers/:name', `删除了供应商「${name}」及名下 ${ids.length} 个商品`)
+    const chats = await db.deleteWhere('chat_messages',
+      m => m.supplier_name === name || m.display_name === name || m.login_id === name)
+    invalidateAiIndex()
+    await log('DELETE /api/v1/suppliers/:name', `删除了供应商「${name}」及名下 ${ids.length} 个商品、${chats} 条聊天记录`)
     return ok(null)
   }
 
@@ -513,8 +589,8 @@ async function route(path, method, body, query) {
       offer_id,
       title: product?.title || '',
       main_img_url: product?.main_img_url || '',
-      first_viewed_at: views.length ? Math.min(...views.map(v => v.viewed_at)) : null,
-      last_viewed_at: views.length ? Math.max(...views.map(v => v.viewed_at)) : null,
+      first_viewed_at: views.length ? minOf(views.map(v => v.viewed_at)) : null,
+      last_viewed_at: views.length ? maxOf(views.map(v => v.viewed_at)) : null,
       // 每次浏览的精确时间（降序），供管理页浏览时间线使用
       view_times: views.map(v => v.viewed_at).sort((a, b) => b - a),
       supplier_name: supplierName,
@@ -744,6 +820,56 @@ async function route(path, method, body, query) {
     const hit = list.find(s => (s.loginIds || []).includes(loginId))
     return ok(hit ? { name: hit.name } : null)
   }
+  // GET /api/v1/suppliers/resolve?name=&login_id= — IM 会话名/旺旺 loginId 反查本地供应商
+  // 解决「会话昵称（如 博宸五金制品）」与「详情页公司全名（如 潮州市博宸五金制品有限公司）」不一致
+  // 匹配顺序：loginId 精确 → 供应商名精确 → 名称互相包含（模糊）→ 历史聊天已绑定的 supplier_name
+  if (path === '/api/v1/suppliers/resolve' && method === 'GET') {
+    const rawName = String(query.name || '').trim()
+    const loginId = String(query.login_id || '').trim()
+    const norm = s => String(s || '')
+      .toLowerCase()
+      .replace(/[\s\u3000]+/g, '')
+      .replace(/[（）()【】\[\]「」《》<>·.,，、\-_/\\]/g, '')
+    const tName = norm(rawName)
+    const list = await db.all('suppliers')
+
+    let best = null
+    const take = (s, by, score) => {
+      if (!best || score > best.score) best = { name: s.name, matched_by: by, score }
+    }
+
+    if (loginId) {
+      const hit = list.find(s => (s.loginIds || []).includes(loginId))
+      if (hit) take(hit, 'loginid', 100)
+    }
+    if (!best && rawName) {
+      const hit = list.find(s => s.name === rawName)
+      if (hit) take(hit, 'name', 90)
+    }
+    if (!best && tName.length >= 4) {
+      for (const s of list) {
+        const n = norm(s.name)
+        if (n.length < 4) continue
+        if (n === tName) { take(s, 'fuzzy', 88); continue }
+        if (!n.includes(tName) && !tName.includes(n)) continue
+        const ratio = Math.min(n.length, tName.length) / Math.max(n.length, tName.length)
+        take(s, 'fuzzy', 60 + ratio * 20)
+      }
+    }
+    if (!best && (loginId || rawName)) {
+      const chats = await db.all('chat_messages')
+      const hitChat = chats.find(m =>
+        m.supplier_name &&
+        ((loginId && m.login_id === loginId) || (rawName && m.display_name === rawName)) &&
+        m.supplier_name !== rawName
+      )
+      if (hitChat) {
+        const s = list.find(x => x.name === hitChat.supplier_name)
+        if (s) take(s, 'chat', 70)
+      }
+    }
+    return ok(best ? { name: best.name, matched_by: best.matched_by } : null)
+  }
   // GET /api/v1/suppliers/profile?name=xx — 读取已保存的供应商档案（客服页信息页 / 后台工厂信息页共用）
   // 档案由客服页自动读取旺旺「档案」Tab 后落库，这里只做读取，不触发抓取
   if (path === '/api/v1/suppliers/profile' && method === 'GET') {
@@ -882,6 +1008,7 @@ async function route(path, method, body, query) {
       await db.put('chat_messages', record)
       saved++
     }
+    if (saved) invalidateAiIndex()
     return ok({ saved })
   }
   // GET /api/v1/chat/messages?login_id=xx&conversation_code=xx&supplier_name=xx&limit=300
@@ -942,13 +1069,317 @@ async function route(path, method, body, query) {
         view_count: views.length,
         appear_count: apps.length,
       },
-      first_view_at: viewTimes.length ? Math.min(...viewTimes) : null,
-      last_view_at: viewTimes.length ? Math.max(...viewTimes) : null,
+      first_view_at: viewTimes.length ? minOf(viewTimes) : null,
+      last_view_at: viewTimes.length ? maxOf(viewTimes) : null,
       daily,
       hourly,
       heatmap,
       timeline,
     })
+  }
+
+  // ── 概览页：全局统计（全部本地流水聚合，单机自足）──  // GET /api/v1/stats/overview
+  if (path === '/api/v1/stats/overview' && method === 'GET') {
+    const [products, records, appears, comments, chatCount] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('appear_records'), db.all('comments'), db.count('chat_messages'),
+    ])
+    const productOf = {}
+    for (const p of products) productOf[p.offer_id] = p
+
+    // 供应商活跃排行：只看「看过」的商品，按供应商聚合（没看过的供应商不进排行）
+    // 首屏只回 50 条，滚到底走 /stats/suppliers 分页，避免供应商多时一次渲染全部
+    const suppliersAll = aggregateSuppliers(products, records, appears)
+    const viewedProducts = suppliersAll.reduce((n, s) => n + s.product_count, 0)
+
+    // 近 30 天按天聚合（单趟分桶，全量流水下比逐天 filter 快）
+    const viewByDay = {}, appearByDay = {}
+    for (const r of records) {
+      const ds = new Date(r.viewed_at).setHours(0, 0, 0, 0)
+      viewByDay[ds] = (viewByDay[ds] || 0) + 1
+    }
+    for (const a of appears) {
+      const ds = new Date(a.appeared_at).setHours(0, 0, 0, 0)
+      appearByDay[ds] = (appearByDay[ds] || 0) + 1
+    }
+    const daily = []
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    for (let i = 29; i >= 0; i--) {
+      const dayStart = today.getTime() - i * DAY
+      const d = new Date(dayStart)
+      daily.push({
+        date: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        view: viewByDay[dayStart] || 0,
+        appear: appearByDay[dayStart] || 0,
+      })
+    }
+    // 24 小时浏览时段分布 + 星期×小时热力图（0=周一 … 6=周日）
+    const hourly = new Array(24).fill(0)
+    const heatmap = Array.from({ length: 7 }, () => new Array(24).fill(0))
+    for (const r of records) {
+      const d = new Date(r.viewed_at)
+      hourly[d.getHours()]++
+      heatmap[(d.getDay() + 6) % 7][d.getHours()]++
+    }
+    // 最近浏览时间轴（第一页 50 条，后续页走 /stats/timeline）
+    const timeline = records.slice().sort((a, b) => b.viewed_at - a.viewed_at).slice(0, 50)
+      .map(r => ({
+        ts: r.viewed_at,
+        offer_id: r.offer_id,
+        title: productOf[r.offer_id]?.title || r.offer_id,
+        supplier_name: productOf[r.offer_id]?.supplier_name || '',
+      }))
+    return ok({
+      totals: {
+        supplier_count: suppliersAll.length,
+        product_count: viewedProducts,
+        view_count: records.length,
+        appear_count: appears.length,
+        comment_count: comments.length,
+        chat_count: chatCount,
+      },
+      suppliers: suppliersAll.slice(0, 50),
+      daily,
+      hourly,
+      heatmap,
+      timeline,
+    })
+  }
+
+  // ── 概览页：供应商排行分页（offset/limit，排序口径与首屏一致）──  // GET /api/v1/stats/suppliers
+  if (path === '/api/v1/stats/suppliers' && method === 'GET') {
+    const offset = Math.max(parseInt(query.offset) || 0, 0)
+    const limit = Math.min(parseInt(query.limit) || 50, 200)
+    const [products, records, appears] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('appear_records'),
+    ])
+    const all = aggregateSuppliers(products, records, appears)
+    return ok(all.slice(offset, offset + limit), { total: all.length })
+  }
+
+  // ── 概览页：全局浏览时间轴分页（before = 上一页最后一条 ts）──  // GET /api/v1/stats/timeline
+  if (path === '/api/v1/stats/timeline' && method === 'GET') {
+    const before = parseInt(query.before) || Number.MAX_SAFE_INTEGER
+    const limit = Math.min(parseInt(query.limit) || 50, 200)
+    const [records, products] = await Promise.all([db.all('view_records'), db.all('products')])
+    const productOf = {}
+    for (const p of products) productOf[p.offer_id] = p
+    const items = records
+      .filter(r => r.viewed_at < before)
+      .sort((a, b) => b.viewed_at - a.viewed_at)
+      .slice(0, limit)
+      .map(r => ({
+        ts: r.viewed_at,
+        offer_id: r.offer_id,
+        title: productOf[r.offer_id]?.title || r.offer_id,
+        supplier_name: productOf[r.offer_id]?.supplier_name || '',
+      }))
+    return ok(items)
+  }
+
+  // ════════════════════════════════════
+  // AI 分析：上下文拼装 + 本地检索（Retrieve）
+  // 数据量大时不把全量内容交给模型：供应商级用「本品数据 + 过滤后的近期聊天」，
+  // 全局级用「聚合统计 + TopN」，定向问题先本地检索再只送相关片段。
+  // ════════════════════════════════════
+
+  // GET /api/v1/ai/context/supplier?name=xx — 单个供应商的分析上下文
+  if (path === '/api/v1/ai/context/supplier' && method === 'GET') {
+    const name = decodeURIComponent(query.name || '').trim()
+    if (!name) return { code: 400, message: 'name 必填' }
+    const [products, records, appears, comments, suppliers, chats] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('appear_records'),
+      db.all('comments'), db.all('suppliers'), db.all('chat_messages'),
+    ])
+    const prods = products.filter(p => p.supplier_name === name)
+    const offerIds = new Set(prods.map(p => p.offer_id))
+    const views = records.filter(r => offerIds.has(r.offer_id))
+    const apps = appears.filter(a => offerIds.has(a.offer_id))
+    const viewCount = {}, lastView = {}
+    for (const r of views) {
+      viewCount[r.offer_id] = (viewCount[r.offer_id] || 0) + 1
+      lastView[r.offer_id] = Math.max(lastView[r.offer_id] || 0, r.viewed_at)
+    }
+    const productNotes = new Map()
+    const supplierNotes = []
+    for (const c of comments) {
+      if (c.kind === 'product' && offerIds.has(c.target)) {
+        if (!productNotes.has(c.target)) productNotes.set(c.target, [])
+        productNotes.get(c.target).push(stripHtml(c.text || ''))
+      } else if (c.kind === 'supplier' && c.target === name) {
+        supplierNotes.push(stripHtml(c.text || ''))
+      }
+    }
+    const sup = suppliers.find(s => s.name === name) || null
+    const myChats = chats.filter(m => m.supplier_name === name || m.display_name === name || m.login_id === name)
+    const { messages: keptChats, stats: noise } = filterChatForAi(myChats, { maxMessages: 300, maxChars: 12000 })
+    const productList = prods
+      .map(p => ({
+        offer_id: p.offer_id,
+        title: clip(p.title, 100),
+        view_count: viewCount[p.offer_id] || 0,
+        last_viewed_at: lastView[p.offer_id] || null,
+        note: clip((productNotes.get(p.offer_id) || [])[0] || '', 300),
+      }))
+      .sort((a, b) => b.view_count - a.view_count || (b.last_viewed_at || 0) - (a.last_viewed_at || 0))
+      .slice(0, 40)
+    const chatTs = myChats.map(m => m.ts).filter(Boolean)
+    return ok({
+      name,
+      archive: archiveSummaryOf(sup),
+      login_ids: sup?.loginIds || [],
+      totals: {
+        product_count: prods.length,
+        view_count: views.length,
+        appear_count: apps.length,
+        comment_count: supplierNotes.length,
+        chat_count: myChats.length,
+        chat_kept: keptChats.length,
+        chat_filtered: noise.filtered,
+        first_view_at: views.length ? minOf(views.map(v => v.viewed_at)) : null,
+        last_view_at: views.length ? maxOf(views.map(v => v.viewed_at)) : null,
+        first_chat_at: chatTs.length ? minOf(chatTs) : null,
+        last_chat_at: chatTs.length ? maxOf(chatTs) : null,
+      },
+      products: productList,
+      notes: supplierNotes.slice(0, 10).map(t => clip(t.replace(/\s+/g, ' '), 300)),
+      transcript: formatChatTranscript(keptChats, '供应商'),
+      noise,
+      truncated: {
+        products: prods.length > productList.length,
+        chats: myChats.length - noise.filtered > keptChats.length,
+      },
+    })
+  }
+
+  // GET /api/v1/ai/context/overview — 全局分析上下文（聚合 + TopN，规模恒定）
+  if (path === '/api/v1/ai/context/overview' && method === 'GET') {
+    const [products, records, appears, comments, chats, suppliers] = await Promise.all([
+      db.all('products'), db.all('view_records'), db.all('appear_records'),
+      db.all('comments'), db.all('chat_messages'), db.all('suppliers'),
+    ])
+    const supByName = new Map(suppliers.map(s => [s.name, s]))
+    const suppliersAll = aggregateSuppliers(products, records, appears)
+    const supplierNoteCount = {}
+    for (const c of comments) {
+      if (c.kind === 'supplier' && c.target) supplierNoteCount[c.target] = (supplierNoteCount[c.target] || 0) + 1
+    }
+
+    // 聊天按供应商归组：统计噪音过滤前后的条数
+    const chatGroups = new Map()
+    for (const m of chats) {
+      const key = m.supplier_name || m.display_name || m.login_id || '未知'
+      if (!chatGroups.has(key)) chatGroups.set(key, [])
+      chatGroups.get(key).push(m)
+    }
+    const noiseTotals = { total: chats.length, kept: 0, filtered: 0, system: 0, auto: 0, greeting: 0, short: 0, duplicate: 0, empty: 0 }
+    const chatSuppliers = []
+    for (const [key, list] of chatGroups) {
+      const { stats } = classifyChat(list)
+      for (const k of Object.keys(noiseTotals)) if (k !== 'total' && k !== 'kept' && k !== 'filtered') noiseTotals[k] += stats[k] || 0
+      noiseTotals.kept += stats.kept
+      noiseTotals.filtered += stats.filtered
+      chatSuppliers.push({
+        name: key,
+        count: list.length,
+        kept: stats.kept,
+        filtered: stats.filtered,
+        last_ts: maxOf(list.map(m => m.ts || 0), 0),
+      })
+    }
+    chatSuppliers.sort((a, b) => b.last_ts - a.last_ts)
+
+    // 商品浏览排行
+    const viewOf = {}
+    for (const r of records) viewOf[r.offer_id] = (viewOf[r.offer_id] || 0) + 1
+    const topProducts = products
+      .filter(p => viewOf[p.offer_id])
+      .sort((a, b) => (viewOf[b.offer_id] || 0) - (viewOf[a.offer_id] || 0))
+      .slice(0, 25)
+      .map(p => ({ title: clip(p.title, 80), supplier_name: p.supplier_name || '', view_count: viewOf[p.offer_id] || 0 }))
+
+    // 近 30 天趋势 + 24 小时分布
+    const viewByDay = {}, appearByDay = {}
+    for (const r of records) {
+      const ds = new Date(r.viewed_at).setHours(0, 0, 0, 0)
+      viewByDay[ds] = (viewByDay[ds] || 0) + 1
+    }
+    for (const a of appears) {
+      const ds = new Date(a.appeared_at).setHours(0, 0, 0, 0)
+      appearByDay[ds] = (appearByDay[ds] || 0) + 1
+    }
+    const daily = []
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    for (let i = 29; i >= 0; i--) {
+      const dayStart = today.getTime() - i * DAY
+      const d = new Date(dayStart)
+      daily.push({
+        date: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        view: viewByDay[dayStart] || 0,
+        appear: appearByDay[dayStart] || 0,
+      })
+    }
+    const hourly = new Array(24).fill(0)
+    for (const r of records) hourly[new Date(r.viewed_at).getHours()]++
+
+    // 档案字段分布（经营模式 / 交易方式 / 认证信息）
+    const fieldValues = k => suppliers.map(s => s.archive_info?.[k]).filter(Boolean)
+    const distributions = {
+      model: topCounts(fieldValues('经营模式')),
+      trade: topCounts(fieldValues('交易方式')),
+      cert: topCounts(fieldValues('认证信息')),
+    }
+
+    const topSuppliers = suppliersAll.slice(0, 25).map(s => ({
+      name: s.name,
+      product_count: s.product_count,
+      view_count: s.view_count,
+      appear_count: s.appear_count,
+      note_count: supplierNoteCount[s.name] || 0,
+      last_view_at: s.last_view_at,
+      archive: archiveSummaryOf(supByName.get(s.name)),
+      chat: (() => {
+        const c = chatSuppliers.find(x => x.name === s.name)
+        return c ? { count: c.count, kept: c.kept, last_ts: c.last_ts } : null
+      })(),
+    }))
+
+    return ok({
+      totals: {
+        supplier_count: suppliersAll.length,
+        supplier_profile_count: suppliers.length,
+        product_count: products.length,
+        viewed_product_count: suppliersAll.reduce((n, s) => n + s.product_count, 0),
+        view_count: records.length,
+        appear_count: appears.length,
+        note_count: comments.length,
+        chat_count: chats.length,
+        chat_supplier_count: chatGroups.size,
+      },
+      chat_noise: noiseTotals,
+      suppliers: topSuppliers,
+      chat_suppliers: chatSuppliers.slice(0, 20).map(c => ({ ...c })),
+      products: topProducts,
+      daily,
+      hourly,
+      distributions,
+      scope: {
+        suppliers_included: topSuppliers.length,
+        suppliers_total: suppliersAll.length,
+        products_included: topProducts.length,
+        products_total: products.filter(p => viewOf[p.offer_id]).length,
+        chats_included: Math.min(noiseTotals.kept, 12000),
+        chats_total: chats.length,
+      },
+    })
+  }
+
+  // POST /api/v1/ai/retrieve { question, limit } — 本地检索相关供应商（不调用外部 AI）
+  if (path === '/api/v1/ai/retrieve' && method === 'POST') {
+    const question = String(body.question || '').trim()
+    if (!question) return { code: 400, message: 'question 必填' }
+    const limit = Math.max(1, Math.min(parseInt(body.limit) || 6, 12))
+    const { hits, indexed } = await retrieveSuppliers(question, limit)
+    return ok({ question, hits, indexed })
   }
 
   // POST /api/v1/chat/rekey { login_id, supplier_name } — 供应商解析成功后，把该登录 ID
@@ -967,6 +1398,7 @@ async function route(path, method, body, query) {
       }
     }
     if (n) await log('POST /api/v1/chat/rekey', `把 ${loginId} 的 ${n} 条聊天记录改挂到「${name}」名下`)
+    if (n) invalidateAiIndex()
     return ok({ updated: n })
   }
 
@@ -983,6 +1415,7 @@ async function route(path, method, body, query) {
       }
     }
     await log('POST /api/v1/chat/repair-ts', `修复了 ${fixed} 条聊天记录的时间戳`)
+    if (fixed) invalidateAiIndex()
     return ok({ fixed })
   }
 
@@ -1001,6 +1434,7 @@ async function route(path, method, body, query) {
     } else {
       return { code: 400, message: '需指定 supplier_name / conversation_code / login_id 之一' }
     }
+    if (n) invalidateAiIndex()
     return ok({ deleted: n })
   }
   // GET /api/v1/chat/conversations —— 管理后台「聊天记录」页数据源

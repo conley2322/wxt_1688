@@ -11,6 +11,7 @@ const showContent = ref(false)
 // 单机版：无账号体系，导航不再区分管理员
 const navItems = [
   { path: '/dashboard', label: '概览', icon: 'DataBoard' },
+  { path: '/ai', label: 'AI 分析', icon: 'MagicStick' },
   { path: '/profile', label: '个人中心', icon: 'UserFilled' },
   { path: '/sources', label: '我的货源', icon: 'Shop' },
   { path: '/updates', label: '更新日志', icon: 'Clock' },

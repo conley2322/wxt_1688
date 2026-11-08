@@ -1,14 +1,141 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore } from '@/stores/app.js'
 import { getProfile } from '@/utils/localdb.js'
+import { api } from '../utils/useApi.js'
+import {
+  AI_DEFAULTS, AI_PROVIDERS, detectProvider, getAiConfig, saveAiConfig, isAiConfigured, testAiConnection,
+  RERANK_DEFAULTS, getRerankConfig, saveRerankConfig, isRerankConfigured, testRerankConnection,
+} from '@/utils/aiClient.js'
 import {
   getRemoteConfig, connectAndRegister, updateNickname,
   disconnect, saveRemoteConfig, SYNC_INTERVALS,
 } from '@/utils/remoteClient.js'
 
 const appStore = useAppStore()
+
+// ── AI 分析配置（OpenAI 兼容接口，仅本机保存）──
+const aiConfig = ref({ ...AI_DEFAULTS })
+const aiSaving = ref(false)
+const aiTesting = ref(false)
+const aiTestResult = ref('')
+const aiProvider = ref(detectProvider(AI_DEFAULTS.baseUrl))
+
+const aiProviderDef = computed(() => AI_PROVIDERS.find(p => p.key === aiProvider.value) || null)
+
+function pickProvider(p) {
+  aiProvider.value = p.key
+  aiConfig.value.baseUrl = p.baseUrl
+  aiConfig.value.model = p.model
+  aiTestResult.value = ''
+}
+
+function pickCustom() {
+  aiProvider.value = 'custom'
+  aiTestResult.value = ''
+}
+
+async function saveAi(silent = false) {
+  if (!String(aiConfig.value.baseUrl || '').trim() || !String(aiConfig.value.model || '').trim()) {
+    ElMessage.warning('请填写接口地址和模型')
+    return false
+  }
+  aiSaving.value = true
+  try {
+    aiConfig.value = await saveAiConfig({ ...aiConfig.value })
+    aiTestResult.value = ''
+    if (!silent) ElMessage.success('AI 配置已保存')
+    return true
+  } finally {
+    aiSaving.value = false
+  }
+}
+
+async function testAi() {
+  if (!isAiConfigured(aiConfig.value)) {
+    ElMessage.warning('请先填写接口地址、API Key 和模型')
+    return
+  }
+  const saved = await saveAi(true)
+  if (!saved) return
+  aiTesting.value = true
+  aiTestResult.value = ''
+  try {
+    const reply = await testAiConnection()
+    aiTestResult.value = `连接成功：${reply.slice(0, 40)}`
+    ElMessage.success('AI 接口连接成功')
+  } catch (e) {
+    aiTestResult.value = `连接失败：${e.message}`
+    ElMessage.error(e.message)
+  } finally {
+    aiTesting.value = false
+  }
+}
+
+async function clearAiKey() {
+  await saveAiConfig({ apiKey: '' })
+  aiConfig.value.apiKey = ''
+  aiTestResult.value = ''
+  ElMessage.success('已清空 API Key')
+}
+
+// ── 重排序 Rerank（可选，硅基流动 BAAI/bge-reranker-v2-m3，Key 仅本机）──
+const rerankConfig = ref({ ...RERANK_DEFAULTS })
+const rerankSaving = ref(false)
+const rerankTesting = ref(false)
+const rerankTestResult = ref('')
+
+async function saveRerank(silent = false) {
+  if (rerankConfig.value.enabled && !isRerankConfigured({ ...rerankConfig.value, enabled: true })) {
+    ElMessage.warning('启用重排序需要填写接口地址、模型和 API Key')
+    return false
+  }
+  rerankSaving.value = true
+  try {
+    rerankConfig.value = await saveRerankConfig({ ...rerankConfig.value })
+    rerankTestResult.value = ''
+    if (!silent) ElMessage.success('重排序配置已保存')
+    return true
+  } finally {
+    rerankSaving.value = false
+  }
+}
+
+function onRerankToggle(on) {
+  if (on && !String(rerankConfig.value.apiKey || '').trim()) {
+    ElMessage.warning('还需填写 Rerank API Key，重排序才会生效')
+  }
+}
+
+async function testRerank() {
+  const saved = await saveRerank(true)
+  if (!saved) return
+  if (!isRerankConfigured(rerankConfig.value)) {
+    ElMessage.warning('请先启用重排序并填写 Key')
+    return
+  }
+  rerankTesting.value = true
+  rerankTestResult.value = ''
+  try {
+    const results = await testRerankConnection()
+    const top = [...results].sort((a, b) => b.score - a.score)[0]
+    rerankTestResult.value = `连接成功：示例相关片段得分 ${top.score.toFixed(3)}`
+    ElMessage.success('重排序接口连接成功')
+  } catch (e) {
+    rerankTestResult.value = `连接失败：${e.message}`
+    ElMessage.error(e.message)
+  } finally {
+    rerankTesting.value = false
+  }
+}
+
+async function clearRerankKey() {
+  await saveRerankConfig({ apiKey: '' })
+  rerankConfig.value.apiKey = ''
+  rerankTestResult.value = ''
+  ElMessage.success('已清空 Rerank Key')
+}
 
 const boxDefault = ref('product')
 
@@ -329,6 +456,9 @@ async function onDisconnect() {
 
 onMounted(async () => {
   const stored = await browser.storage.local.get(['boxDefault', 'toolbarConfig', 'appSettings', 'imQuickPhrases'])
+  aiConfig.value = await getAiConfig()
+  aiProvider.value = detectProvider(aiConfig.value.baseUrl)
+  rerankConfig.value = await getRerankConfig()
   if (stored.boxDefault) boxDefault.value = stored.boxDefault
   if (stored.toolbarConfig) Object.assign(toolbarConfig.value, stored.toolbarConfig)
 
@@ -399,7 +529,85 @@ async function autoSave() {
   <section>
     <h2 class="page-title">系统设置</h2>
 
-    <!-- 服务器连接（多人共享） -->
+    <!-- AI 分析配置：接口地址 / API Key / 模型（仅本机保存） -->
+    <el-card style="margin-bottom:16px">
+      <template #header>AI 分析配置（OpenAI 兼容接口）</template>
+      <el-form label-width="110px">
+        <el-form-item label="服务商">
+          <div class="ai-providers">
+            <el-button
+              v-for="p in AI_PROVIDERS"
+              :key="p.key"
+              size="small"
+              :type="aiProvider === p.key ? 'primary' : 'default'"
+              @click="pickProvider(p)"
+            >{{ p.label }}</el-button>
+            <el-button size="small" :type="aiProvider === 'custom' ? 'primary' : 'default'" @click="pickCustom">自定义</el-button>
+            <a v-if="aiProviderDef" class="ai-doc" :href="aiProviderDef.docs" target="_blank" rel="noreferrer">接口文档</a>
+            <a v-if="aiProviderDef?.keyUrl" class="ai-doc" :href="aiProviderDef.keyUrl" target="_blank" rel="noreferrer">申请 Key</a>
+          </div>
+          <div class="switch-desc">
+            <template v-if="aiProvider === 'sensenova'">商汤日日新（OpenAI 兼容）。在商汤控制台申请以 sk- 开头的 Key 填到下方即可；模型可选 {{ aiProviderDef?.models.join(' / ') }}</template>
+            <template v-else-if="aiProviderDef">已填入 {{ aiProviderDef.label }} 的默认地址和模型，可按需修改；Key 请到服务商控制台申请</template>
+            <template v-else>任意 OpenAI 兼容接口：填到 /v1 即可（自动补 /chat/completions），也可直接填完整的 /chat/completions 地址</template>
+          </div>
+        </el-form-item>
+        <el-form-item label="接口地址">
+          <el-input v-model="aiConfig.baseUrl" placeholder="https://token.sensenova.cn/v1" style="width:380px" />
+          <div class="switch-desc">DeepSeek、通义、智谱、中转站等 OpenAI 兼容接口同样适用</div>
+        </el-form-item>
+        <el-form-item label="API Key">
+          <el-input v-model="aiConfig.apiKey" type="password" show-password placeholder="sk-..." style="width:380px" />
+          <div class="switch-desc">仅保存在本机浏览器，不会上传到同步服务器；调用时直接发送到你填写的接口地址</div>
+        </el-form-item>
+        <el-form-item label="模型">
+          <el-input v-model="aiConfig.model" placeholder="sensenova-6.8-flash-lite" style="width:260px" />
+          <span v-if="aiProviderDef?.models?.length" class="switch-desc" style="margin-left:12px">常用：{{ aiProviderDef.models.join('、') }}</span>
+        </el-form-item>
+        <el-form-item label="温度">
+          <el-slider v-model="aiConfig.temperature" :min="0" :max="1" :step="0.1" style="width:240px" />
+          <span class="switch-desc" style="margin-left:12px">越低越稳定，采购分析建议 0.2–0.4</span>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="aiSaving" @click="saveAi()">保存</el-button>
+          <el-button :loading="aiTesting" @click="testAi">测试连接</el-button>
+          <el-button v-if="aiConfig.apiKey" text type="danger" @click="clearAiKey">清空 Key</el-button>
+          <span v-if="aiTestResult" class="ai-test-result" :class="{ bad: aiTestResult.startsWith('连接失败') }">{{ aiTestResult }}</span>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <!-- 重排序 Rerank：本地 BM25 召回后重新打分（可选） -->
+    <el-card style="margin-bottom:16px">
+      <template #header>重排序 Rerank（可选 · 硅基流动 BAAI/bge-reranker-v2-m3）</template>
+      <el-form label-width="110px">
+        <el-form-item label="启用">
+          <el-switch v-model="rerankConfig.enabled" @change="onRerankToggle" />
+          <span class="switch-desc" style="margin-left:12px">
+            开启后「AI 分析 → 定向检索」会先用本地 BM25 召回候选，再由 Rerank 模型重新排序；只发送候选文本，不上传全量数据
+          </span>
+        </el-form-item>
+        <el-form-item label="接口地址">
+          <el-input v-model="rerankConfig.baseUrl" placeholder="https://api.siliconflow.cn/v1" style="width:380px" />
+          <a class="ai-doc" href="https://api-docs.siliconflow.cn/docs/api/rerank-post" target="_blank" rel="noreferrer">接口文档</a>
+          <div class="switch-desc">自动补 /rerank；也兼容其他返回 results[].relevance_score 的重排序服务</div>
+        </el-form-item>
+        <el-form-item label="模型">
+          <el-input v-model="rerankConfig.model" placeholder="BAAI/bge-reranker-v2-m3" style="width:260px" />
+        </el-form-item>
+        <el-form-item label="API Key">
+          <el-input v-model="rerankConfig.apiKey" type="password" show-password placeholder="sk-..." style="width:380px" />
+          <a class="ai-doc" href="https://cloud.siliconflow.cn/account/ak" target="_blank" rel="noreferrer">申请 Key</a>
+          <div class="switch-desc">与对话模型的 Key 分开填写；仅保存在本机浏览器</div>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="rerankSaving" @click="saveRerank()">保存</el-button>
+          <el-button :loading="rerankTesting" @click="testRerank">测试重排序</el-button>
+          <el-button v-if="rerankConfig.apiKey" text type="danger" @click="clearRerankKey">清空 Key</el-button>
+          <span v-if="rerankTestResult" class="ai-test-result" :class="{ bad: rerankTestResult.startsWith('连接失败') }">{{ rerankTestResult }}</span>
+        </el-form-item>
+      </el-form>
+    </el-card>
     <el-card style="margin-bottom:16px">
       <template #header>服务器连接 · 多人共享</template>
 
@@ -663,6 +871,12 @@ async function autoSave() {
 <style scoped>
 .page-title { font-size: 20px; font-weight: 600; color: #303133; margin: 0 0 20px; }
 .switch-desc { font-size: 12px; color: #909399; margin-top: 4px; }
+.ai-providers { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 0; }
+.ai-providers .el-button + .el-button { margin-left: 8px; }
+.ai-doc { font-size: 12px; color: #8a6d3b; margin-left: 12px; text-decoration: none; }
+.ai-doc:hover { text-decoration: underline; }
+.ai-test-result { margin-left: 12px; font-size: 12px; color: #67c23a; }
+.ai-test-result.bad { color: #f56c6c; }
 .storage-usage { font-size: 16px; font-weight: 700; color: #303133; }
 .store-desc { font-size: 12px; color: #909399; }
 .import-btn { margin: 0 12px; }

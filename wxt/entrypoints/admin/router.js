@@ -4,6 +4,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 const routes = [
   { path: '/', redirect: '/dashboard' },
   { path: '/dashboard', component: () => import('./pages/Dashboard.vue'), meta: { title: '概览' } },
+  { path: '/ai', component: () => import('./pages/AiPage.vue'), meta: { title: 'AI 分析' } },
   { path: '/sources', component: () => import('./pages/MySources.vue'), meta: { title: '我的货源' } },
   // 旧路径兼容（商品/供应商管理已合并为「我的货源」）
   { path: '/products', redirect: '/sources' },

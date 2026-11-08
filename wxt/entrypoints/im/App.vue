@@ -1,12 +1,20 @@
 <!-- im/App.vue — 旺旺客服页「备注」Tab 面板（左右布局：左侧竖向导航 + 右侧内容页）
-     左侧导航：备注 / 聊天 / 商品 / 信息
+     左侧导航：备注 / 聊天 / AI / 商品 / 信息
      - 备注：富文本编辑器（与详情页浮窗互通，自动保存）+ 团队成员笔记
      - 聊天：实时采集入库的聊天记录（含图片，永久保存）
+     - AI：直接分析当前会话资料与聊天内容（与后台「我的货源 · AI」共用对话记录）
      - 商品：该供应商下我看过的商品
      - 信息：供应商档案基础信息（自动读取原生「档案」Tab：公司名/年限/交易方式/BSR） -->
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { api } from '@/utils/dataClient.js'
+import { aiChat, aiAbort } from '@/utils/aiBridge.js'
+import { getAiConfig, isAiConfigured } from '@/utils/aiClient.js'
+import { buildSupplierChatSystem } from '@/utils/aiPrompts.js'
+import {
+  loadAllChats, addChatMessage, removeChatMessage, clearChatMessages,
+  subscribeChats, newMsgId,
+} from '@/utils/supplierAiStore.js'
 import CommentInput from '@/entrypoints/win/components/CommentInput.vue'
 import OthersComments from '@/entrypoints/win/components/OthersComments.vue'
 import HsTrendChart from '@/components/HsTrendChart.vue'
@@ -29,6 +37,7 @@ const activePage = ref('note')   // 跟随左侧导航
 const NAV_PAGES = [
   { key: 'note', icon: '📝', label: '备注' },
   { key: 'chat', icon: '💬', label: '聊天' },
+  { key: 'ai', icon: '🤖', label: 'AI' },
   { key: 'goods', icon: '📦', label: '商品' },
   { key: 'info', icon: '🏭', label: '信息' },
 ]
@@ -75,7 +84,10 @@ function bridgedLoginId() {
 }
 
 const sourceText = computed(() =>
-  ({ binding: '历史绑定', detail: '详情页映射', offer: '本地商品库', archive: '供应商档案', 'header-name': '会话名称' }[resolveSource.value] || '未识别'))
+  ({
+    binding: '历史绑定', detail: '详情页映射', offer: '本地商品库', archive: '供应商档案',
+    'header-name': '会话名称', loginid: '详情页绑定', fuzzy: '名称匹配', chat: '聊天记录',
+  }[resolveSource.value] || '未识别'))
 
 // ── touid/会话名 → 供应商名 绑定映射（browser.storage.local 持久化）──
 async function loadBindings() {
@@ -97,7 +109,7 @@ async function saveBinding(key, name) {
 // 档案永远优先：每次会话切换自动读原生「档案」（真实店铺公司名，按会话名缓存），
 // 读不到才退回：入口 offerId 商品库（仅入口会话）→ 历史/入口绑定 → 公司名后缀直认。
 // 绑定不能抢先：错误时期的陈旧绑定会把会话错绑到别的供应商（实测「广州雅洁厨具→广东百申实业」）。
-const COMPANY_SUFFIX = /公司|厂|商贸|经营部|实业|门市|经销|批发部|商行|贸易/
+const COMPANY_SUFFIX = /公司|厂|商贸|经营部|实业|门市|经销|批发部|商行|贸易|制品|科技|服饰|包装|工艺|家具|建材|塑料|模具|机械|电器|照明|纺织|食品|日用品|五金|电子/
 const archiveCache = new Map() // 会话显示名 → 档案信息 | null（读不到也缓存，页面会话内不再重试）
 const entryHeaderName = ref(urlLoginId) // 页面加载时的首个会话（入口会话）显示名
 
@@ -163,6 +175,32 @@ async function resolveSupplier() {
       }
     } catch (e) {
       console.warn('[alocs:im] offerId 解析供应商失败', e)
+    }
+  }
+  // 2.5 本地库反查：详情页回传的 loginId 绑定 / 供应商名精确或模糊匹配 / 历史聊天绑定
+  //（「博宸五金制品」这类会话昵称与公司全名不一致时，靠这一步命中）
+  if (!supplierName.value) {
+    try {
+      const qs = new URLSearchParams()
+      if (headerName) qs.set('name', headerName)
+      // 只有入口会话的 urlLoginId 一定属于当前会话；会话内切走后 URL 不会更新，
+      // 传入旧 loginId 会按强绑定命中错误供应商，所以这里只用会话名匹配
+      if (isEntryConv && urlLoginId) qs.set('login_id', urlLoginId)
+      const res = await api(`/api/v1/suppliers/resolve?${qs.toString()}`)
+      if (res.code === 200 && res.data?.name) {
+        supplierName.value = res.data.name
+        resolveSource.value = res.data.matched_by || 'fuzzy'
+        await saveBinding(headerName, supplierName.value)
+        if (isEntryConv && urlLoginId) await saveBinding(urlLoginId, supplierName.value)
+        await api('/api/v1/suppliers/profile', 'POST', {
+          login_id: (isEntryConv && urlLoginId) || headerName, name: supplierName.value,
+        }).catch(() => {})
+        await api('/api/v1/chat/rekey', 'POST', { login_id: headerName, supplier_name: supplierName.value }).catch(() => {})
+        setResolvedSupplier(headerName, supplierName.value)
+        return
+      }
+    } catch (e) {
+      console.warn('[alocs:im] 本地库反查供应商失败', e)
     }
   }
   // 3. 历史绑定（档案读不到时兜底）
@@ -250,6 +288,173 @@ async function loadChat() {
   chatLoading.value = false
 }
 
+// ── AI 助手：直接分析当前会话资料与聊天记录 ──
+// 对话保存在 aiSupplierChats（与后台「我的货源 · AI」同一份），靠 supplierName 对齐；
+// 未识别供应商时退回会话显示名，后台「聊天记录」里同名的供应商也能看到这段对话。
+const AI_QUICK = [
+  '总结一下和这家供应商聊了什么',
+  '对方报了什么价、什么条件',
+  '有哪些承诺没落实、该追问什么',
+  '这家供应商有什么风险',
+]
+const aiReady = ref(false)
+const aiModel = ref('')
+const aiChats = ref({})
+const aiInput = ref('')
+const aiSendingKey = ref('')
+const aiError = ref('')
+const aiTip = ref('')
+const aiScrollEl = ref(null)
+let aiTipTimer = null
+let aiRequestId = ''
+let stopAiSync = null
+
+const aiKey = computed(() => supplierName.value || loginId.value)
+const aiMessages = computed(() => aiChats.value[aiKey.value] || [])
+const aiBusy = computed(() => !!aiSendingKey.value && aiSendingKey.value === aiKey.value)
+
+function scrollAiToBottom() {
+  nextTick(() => {
+    const el = aiScrollEl.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function flashAiTip(text) {
+  aiTip.value = text
+  if (aiTipTimer) clearTimeout(aiTipTimer)
+  aiTipTimer = setTimeout(() => { aiTip.value = '' }, 2000)
+}
+
+async function loadAiState() {
+  const cfg = await getAiConfig()
+  aiReady.value = isAiConfigured(cfg)
+  aiModel.value = cfg.model || ''
+  aiChats.value = await loadAllChats()
+}
+
+function applyExternalChats(next) {
+  // 正在生成时，避免外部写入覆盖本页刚追加的消息
+  if (aiSendingKey.value && aiChats.value[aiSendingKey.value]) {
+    aiChats.value = { ...next, [aiSendingKey.value]: aiChats.value[aiSendingKey.value] }
+  } else {
+    aiChats.value = next
+  }
+  if (activePage.value === 'ai') scrollAiToBottom()
+}
+
+function appendAi(key, msg) {
+  aiChats.value = { ...aiChats.value, [key]: [...(aiChats.value[key] || []), msg] }
+  scrollAiToBottom()
+  return addChatMessage(key, msg)
+}
+
+function stopAi() {
+  if (aiRequestId) aiAbort(aiRequestId)
+  aiSendingKey.value = ''
+}
+
+async function sendAiMessage(preset, opts = {}) {
+  const key = aiKey.value
+  if (!key) { flashAiTip('未识别供应商，无法分析'); return }
+  if (aiSendingKey.value) return
+  const text = String(preset ?? aiInput.value).trim()
+  if (!text) return
+  if (!aiReady.value) {
+    aiError.value = '尚未配置 AI 接口：请在扩展后台「系统设置」填写接口地址、API Key 和模型'
+    return
+  }
+  aiError.value = ''
+  if (!opts.reuseUser) {
+    aiInput.value = ''
+    await appendAi(key, { id: newMsgId(), role: 'user', text, at: Date.now() })
+  } else {
+    scrollAiToBottom()
+  }
+
+  aiSendingKey.value = key
+  const requestId = `im-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  aiRequestId = requestId
+  try {
+    const res = await api(`/api/v1/ai/context/supplier?name=${encodeURIComponent(key)}`)
+    if (res.code !== 200) throw new Error(res.message || '读取会话资料失败')
+    const system = buildSupplierChatSystem(res.data)
+    const history = (aiChats.value[key] || [])
+      .filter(m => !m.error && m.text)
+      .slice(-12)
+      .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text.slice(0, 2000) }))
+    const out = await aiChat({
+      messages: [{ role: 'system', content: system }, ...history],
+      maxTokens: 2400,
+    }, requestId)
+    if (out.code !== 200) throw new Error(out.message || 'AI 请求失败')
+    await appendAi(key, {
+      id: newMsgId(),
+      role: 'assistant',
+      text: out.data,
+      at: Date.now(),
+      model: aiModel.value,
+      chat_kept: res.data.totals?.chat_kept || 0,
+    })
+  } catch (e) {
+    if (e.message !== '已取消') {
+      await appendAi(key, {
+        id: newMsgId(),
+        role: 'assistant',
+        text: `请求失败：${e.message}`,
+        error: true,
+        retryText: text,
+        at: Date.now(),
+      })
+    }
+  } finally {
+    if (aiSendingKey.value === key) aiSendingKey.value = ''
+    if (aiRequestId === requestId) aiRequestId = ''
+    scrollAiToBottom()
+  }
+}
+
+async function retryAi(m) {
+  const key = aiKey.value
+  aiChats.value = { ...aiChats.value, [key]: (aiChats.value[key] || []).filter(x => x.id !== m.id) }
+  if (m.id) await removeChatMessage(key, m.id)
+  if (m.retryText) await sendAiMessage(m.retryText, { reuseUser: true })
+}
+
+async function clearAiChat() {
+  const key = aiKey.value
+  if (!key || aiSendingKey.value) return
+  if (!window.confirm('清空后这段对话将从本机删除（后台也同步消失），是否继续？')) return
+  aiChats.value = { ...aiChats.value, [key]: [] }
+  await clearChatMessages(key)
+  flashAiTip('已清空该供应商的 AI 对话')
+}
+
+async function copyAi(m) {
+  try {
+    await navigator.clipboard.writeText(m.text)
+    flashAiTip('已复制')
+  } catch {
+    flashAiTip('复制失败')
+  }
+}
+
+function onAiEnter(e) {
+  if (e.shiftKey || e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  sendAiMessage()
+}
+
+function fmtAiTime(ts) {
+  const d = new Date(ts)
+  const p = n => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function openAiSettings() {
+  try { window.open(browser.runtime.getURL('/admin.html#/settings'), '_blank') } catch {}
+}
+
 // ── 备注小红点：备注有内容且当前不在备注页时，左侧导航的「备注」上提示 ──
 const noteHasContent = ref(false)
 const noteUnread = ref(false)
@@ -284,6 +489,7 @@ watch(activePage, (page) => {
   } else if (noteHasContent.value) {
     noteUnread.value = true
   }
+  if (page === 'ai') scrollAiToBottom()
 })
 
 // ── 会话切换感知：头部显示名变化时重新解析 ──
@@ -356,6 +562,8 @@ onMounted(() => {
   loadNavOrder()
   refreshAll()
   loadPhrases()
+  loadAiState()
+  stopAiSync = subscribeChats(applyExternalChats)
   watchConversationHeader()
   onImShow(refreshAll)
   // iframe 文档被 1688 重建后重新挂头部观察器
@@ -364,6 +572,8 @@ onMounted(() => {
   onChatUpdated(loadChat)
 })
 onBeforeUnmount(() => {
+  stopAiSync?.()
+  stopAiSync = null
   if (headerObserver) headerObserver.disconnect()
   onImShow(null)
   onImDocChange(null)
@@ -371,6 +581,11 @@ onBeforeUnmount(() => {
 })
 
 watch(supplierName, (name) => loadProducts(name))
+watch(aiKey, () => {
+  aiInput.value = ''
+  aiError.value = ''
+  if (activePage.value === 'ai') scrollAiToBottom()
+})
 </script>
 
 <template>
@@ -466,6 +681,60 @@ watch(supplierName, (name) => loadProducts(name))
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- AI 页：直接分析当前会话（与后台共用对话记录） -->
+      <div v-show="activePage === 'ai'" class="page page-ai">
+        <div class="ai-head">
+          <div class="ai-head-main">
+            <span class="ai-head-title">AI 采购助手</span>
+            <span class="ai-head-sub" :title="aiKey || ''">{{ aiKey || '未识别供应商' }}</span>
+          </div>
+          <div class="ai-head-actions">
+            <button v-if="aiBusy" class="ai-btn" @click="stopAi">停止</button>
+            <button class="ai-btn" :disabled="!aiMessages.length" @click="clearAiChat">清空</button>
+          </div>
+        </div>
+        <div ref="aiScrollEl" class="ai-scroll">
+          <div v-if="aiError" class="ai-err">
+            {{ aiError }}
+            <span class="ai-link" @click="openAiSettings">打开设置</span>
+          </div>
+          <div v-else-if="!aiMessages.length && !aiBusy" class="ai-empty">
+            <div class="ai-empty-title">可以直接问这家供应商的资料和聊天内容</div>
+            <div class="ai-empty-sub">对话保存在本机，后台「我的货源 · AI」能看到同一段对话</div>
+            <div class="ai-chips">
+              <span v-for="q in AI_QUICK" :key="q" class="ai-chip" @click="sendAiMessage(q)">{{ q }}</span>
+            </div>
+          </div>
+          <div v-for="m in aiMessages" :key="m.id" class="cm" :class="m.role">
+            <div class="cm-avatar">{{ m.role === 'user' ? '我' : 'AI' }}</div>
+            <div class="cm-main">
+              <div class="cm-bubble" :class="{ error: m.error }">{{ m.text }}</div>
+              <div class="cm-meta">
+                <span>{{ fmtAiTime(m.at) }}</span>
+                <span v-if="m.model">· {{ m.model }}</span>
+                <button class="cm-act" @click="copyAi(m)">复制</button>
+                <button v-if="m.error && m.retryText" class="cm-act" @click="retryAi(m)">重试</button>
+              </div>
+            </div>
+          </div>
+          <div v-if="aiBusy" class="cm assistant">
+            <div class="cm-avatar">AI</div>
+            <div class="cm-main"><div class="cm-bubble typing"><i></i><i></i><i></i></div></div>
+          </div>
+        </div>
+        <div class="ai-inputbar">
+          <textarea
+            v-model="aiInput"
+            rows="2"
+            class="ai-textarea"
+            :placeholder="aiBusy ? '正在回答…' : '问点什么（Enter 发送，Shift+Enter 换行）'"
+            @keydown="onAiEnter"
+          ></textarea>
+          <button class="ai-send" :disabled="aiBusy || !aiInput.trim()" @click="sendAiMessage()">发送</button>
+        </div>
+        <div v-if="aiTip" class="ai-toast">{{ aiTip }}</div>
       </div>
 
       <!-- 商品页 -->
@@ -597,6 +866,105 @@ watch(supplierName, (name) => loadProducts(name))
 .chat-fixed { flex-shrink: 0; background: #fff; border-bottom: 1px solid #f0f0f0; }
 .chat-fixed .sec { border-bottom: none; }
 .chat-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* AI 页：对话区独立滚动，输入框固定底部 */
+.page-ai {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.ai-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #fffaf5;
+  border-bottom: 1px solid #f5e8dc;
+}
+.ai-head-main { min-width: 0; display: flex; flex-direction: column; }
+.ai-head-title { font-size: 13px; font-weight: 600; color: #333; }
+.ai-head-sub {
+  font-size: 11px; color: #b0b0b0; margin-top: 1px;
+  max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-head-actions { flex-shrink: 0; display: flex; gap: 6px; }
+.ai-btn {
+  border: 1px solid #e5e5e5; background: #fff; color: #666;
+  border-radius: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer;
+}
+.ai-btn:hover { color: #ff5b00; border-color: #ffd2b8; }
+.ai-btn:disabled { opacity: .45; cursor: not-allowed; }
+.ai-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 10px; }
+.ai-empty { padding: 18px 6px; text-align: center; color: #999; }
+.ai-empty-title { font-size: 13px; color: #666; margin-bottom: 4px; }
+.ai-empty-sub { font-size: 11px; color: #bbb; margin-bottom: 12px; }
+.ai-chips { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.ai-chip {
+  font-size: 12px; color: #ff5b00; background: #fff6ef; border: 1px solid #ffe0cc;
+  border-radius: 14px; padding: 4px 12px; cursor: pointer; max-width: 100%;
+}
+.ai-chip:hover { background: #ffefe3; }
+.ai-err {
+  background: #fef0f0; color: #c45656; font-size: 12px; border-radius: 6px;
+  padding: 8px 10px; line-height: 1.5;
+}
+.ai-link { color: #ff5b00; text-decoration: underline; cursor: pointer; margin-left: 4px; }
+.cm { display: flex; align-items: flex-start; gap: 7px; margin-bottom: 12px; }
+.cm.user { flex-direction: row-reverse; }
+.cm-avatar {
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: #fff; background: #ff8a45; margin-top: 2px;
+}
+.cm.assistant .cm-avatar { background: #3a8ee6; }
+.cm-main { max-width: 82%; display: flex; flex-direction: column; }
+.cm.user .cm-main { align-items: flex-end; }
+.cm-bubble {
+  font-size: 12.5px; line-height: 1.6; color: #333;
+  background: #f5f6f7; border-radius: 10px; padding: 7px 10px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.cm.user .cm-bubble { background: #fff1e7; color: #333; }
+.cm-bubble.error { background: #fef0f0; color: #c45656; }
+.cm-meta {
+  display: flex; align-items: center; gap: 6px; margin-top: 3px;
+  font-size: 10px; color: #bbb;
+}
+.cm-act { border: none; background: none; color: #b0b0b0; font-size: 10px; cursor: pointer; padding: 0; }
+.cm-act:hover { color: #ff5b00; }
+.cm-bubble.typing { display: flex; gap: 4px; padding: 10px 12px; }
+.cm-bubble.typing i {
+  width: 5px; height: 5px; border-radius: 50%; background: #bbb; display: inline-block;
+  animation: ai-blink 1.2s infinite ease-in-out;
+}
+.cm-bubble.typing i:nth-child(2) { animation-delay: .2s; }
+.cm-bubble.typing i:nth-child(3) { animation-delay: .4s; }
+@keyframes ai-blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+.ai-inputbar {
+  flex-shrink: 0; display: flex; gap: 8px; align-items: flex-end;
+  padding: 8px 10px; border-top: 1px solid #f0f0f0; background: #fff;
+}
+.ai-textarea {
+  flex: 1; min-width: 0; resize: none; box-sizing: border-box;
+  border: 1px solid #e5e5e5; border-radius: 8px; padding: 6px 8px;
+  font-size: 12.5px; line-height: 1.5; font-family: inherit; color: #333;
+  outline: none;
+}
+.ai-textarea:focus { border-color: #ffb88c; }
+.ai-send {
+  flex-shrink: 0; border: none; border-radius: 8px; background: #ff5b00; color: #fff;
+  font-size: 12px; padding: 7px 12px; cursor: pointer;
+}
+.ai-send:disabled { background: #ffd2b8; cursor: not-allowed; }
+.ai-toast {
+  position: absolute; left: 50%; bottom: 68px; transform: translateX(-50%);
+  background: rgba(0, 0, 0, .72); color: #fff; font-size: 11px;
+  border-radius: 12px; padding: 4px 10px; pointer-events: none; z-index: 2;
+}
 
 /* 右侧内容区 */
 .content-area {

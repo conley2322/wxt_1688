@@ -1,8 +1,16 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Delete, ArrowRight, TopRight } from '@element-plus/icons-vue'
 import { api } from '../utils/useApi.js'
+import { getAiConfig, isAiConfigured, chatComplete } from '@/utils/aiClient.js'
+import { buildSupplierChatSystem } from '@/utils/aiPrompts.js'
+import {
+  loadAllChats, saveAllChats, addChatMessage, removeChatMessage,
+  clearChatMessages, subscribeChats, newMsgId,
+} from '@/utils/supplierAiStore.js'
+import { classifyChat } from '@/utils/chatFilter.js'
 import CommentInput from '@/entrypoints/win/components/CommentInput.vue'
 import OthersComments from '@/entrypoints/win/components/OthersComments.vue'
 import HsTrendChart from '@/components/HsTrendChart.vue'
@@ -17,6 +25,9 @@ const groups = ref([])
 const stats = ref({ total_suppliers: 0, suppliers_with_notes: 0, total_products: 0, products_with_notes: 0, total_views: 0, total_appears: 0 })
 const loading = ref(false)
 const searchText = ref('')
+// 概览页「供应商排行」点行跳转：/sources?name=xxx，首次加载时优先选中
+const route = useRoute()
+const initialName = typeof route.query.name === 'string' ? route.query.name : ''
 
 // ── 工厂信息筛选（级联计数：面板上每个选项的数字都对应列表里真实可见的条目）──
 const filterOpen = ref(false)
@@ -62,9 +73,14 @@ const allEntries = computed(() => {
     if (map.has(key)) map.get(key).chat = c
     else map.set(key, { name: key, group: null, chat: c, chatSearch: `${key} ${c.display_name || ''} ${c.login_id || ''}` })
   }
+  // 只有 AI 对话的供应商也列出来（客服面板聊过的内容，后台要能点进去看）
+  for (const name of Object.keys(aiChats.value)) {
+    if (!map.has(name)) map.set(name, { name, group: null, chat: null, chatSearch: name })
+  }
   const list = [...map.values()]
   for (const e of list) {
-    e.lastActivity = Math.max(e.group?.last_activity || 0, e.chat?.last_ts || 0)
+    const aiTs = (aiChats.value[e.name] || []).reduce((t, m) => Math.max(t, m.at || 0), 0)
+    e.lastActivity = Math.max(e.group?.last_activity || 0, e.chat?.last_ts || 0, aiTs)
     e.pinned = pinnedSuppliers.value.includes(e.name)
   }
   return list
@@ -146,13 +162,19 @@ const visibleEntries = computed(() => searchedEntries.value.filter(e => {
 const chatSuppliers = ref([])
 const chatMessages = ref([])
 const chatLoading = ref(false)
-const rightTab = ref('note')   // note | goods | chat（顺序可拖拽，见 tabOrder）
+// 聊天页「隐藏无用消息」：只影响展示，不改动原始数据
+const chatHideNoise = ref(false)
+const chatClassified = computed(() => classifyChat(chatMessages.value))
+const chatDisplay = computed(() => (chatHideNoise.value ? chatClassified.value.messages : chatMessages.value))
+const rightTab = ref('note')   // note | factory | goods | data | chat | ai（顺序可拖拽，见 tabOrder）
 // 右栏子页签：顺序可拖拽（持久化 imSourceTabsOrder），初始页 = 第一位
 const RIGHT_TABS = [
   { key: 'note', label: '备注' },
   { key: 'factory', label: '工厂信息' },
-  { key: 'goods', label: '看过哪些商品' },
+  { key: 'goods', label: '商品' },
+  { key: 'data', label: '数据' },
   { key: 'chat', label: '聊天记录' },
+  { key: 'ai', label: 'AI 分析' },
 ]
 const tabOrder = ref(RIGHT_TABS.map(t => t.key))
 const tabItems = computed(() => tabOrder.value.map(k => RIGHT_TABS.find(t => t.key === k)))
@@ -236,6 +258,225 @@ async function loadSupplierStats(name) {
     console.error('[MySources] 供应商数据加载失败', e)
   }
 }
+
+// ── 供应商 AI 对话（每个供应商保留一段独立对话，与客服面板共用同一份存储）──
+const AI_QUICK_QUESTIONS = [
+  '综合介绍一下这家供应商',
+  '价格、起订量和账期怎么样',
+  '交期、产能和定制能力如何',
+  '有哪些风险和资料缺口',
+]
+
+const aiReady = ref(false)
+const aiModel = ref('')
+const aiChats = ref({})
+const aiInput = ref('')
+const aiSendingName = ref('')
+const aiChatListEl = ref(null)
+let aiChatCtrl = null
+let stopAiSync = null
+
+const aiMessages = computed(() => aiChats.value[currentName.value] || [])
+const aiBusy = computed(() => aiSendingName.value === currentName.value)
+const aiAnyBusy = computed(() => !!aiSendingName.value)
+
+function scrollAiToBottom() {
+  nextTick(() => {
+    const el = aiChatListEl.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+// 旧版单次分析结果 → 对话消息（迁移后旧数据会被移除，避免重复出现）
+function legacyReportText(report) {
+  const o = report?.result
+  if (!o) return ''
+  const lines = []
+  if (o.summary) lines.push(o.summary)
+  for (const s of o.sections || []) {
+    lines.push('', `【${s.title}】`)
+    for (const it of s.items || []) lines.push(`· ${it}`)
+  }
+  if (o.risks?.length) {
+    lines.push('', '【风险与待核实】')
+    for (const r of o.risks) lines.push(`· ${r}`)
+  }
+  if (o.next_actions?.length) {
+    lines.push('', '【下一步】')
+    for (const r of o.next_actions) lines.push(`· ${r}`)
+  }
+  return lines.join('\n').trim()
+}
+
+async function loadAiState() {
+  const cfg = await getAiConfig()
+  aiReady.value = isAiConfigured(cfg)
+  aiModel.value = cfg.model || ''
+  aiChats.value = await loadAllChats()
+
+  const { aiSupplierReports } = await browser.storage.local.get('aiSupplierReports')
+  let migrated = 0
+  for (const [name, report] of Object.entries(aiSupplierReports || {})) {
+    if ((aiChats.value[name] || []).length) continue
+    const text = legacyReportText(report)
+    if (!text) continue
+    aiChats.value[name] = [{
+      id: `legacy-${report.at || Date.now()}`,
+      role: 'assistant',
+      text,
+      at: report.at || Date.now(),
+      model: report.model || '',
+    }]
+    migrated++
+  }
+  if (migrated) {
+    await persistAiChats()
+    await browser.storage.local.remove('aiSupplierReports')
+  }
+}
+
+async function persistAiChats() {
+  aiChats.value = await saveAllChats(aiChats.value)
+}
+
+// 本页写入 + 跨页面同步（客服面板的 AI 页签共用同一份对话）
+function appendAi(name, msg) {
+  aiChats.value = { ...aiChats.value, [name]: [...(aiChats.value[name] || []), msg] }
+  scrollAiToBottom()
+  return addChatMessage(name, msg)
+}
+
+function applyExternalChats(next) {
+  // 正在生成时，避免外部写入把本页刚追加的消息覆盖掉
+  if (aiSendingName.value && aiChats.value[aiSendingName.value]) {
+    aiChats.value = { ...next, [aiSendingName.value]: aiChats.value[aiSendingName.value] }
+  } else {
+    aiChats.value = next
+  }
+  if (rightTab.value === 'ai') scrollAiToBottom()
+}
+
+function stopAi() {
+  aiChatCtrl?.abort()
+}
+
+async function sendAiMessage(preset, opts = {}) {
+  const name = currentName.value
+  if (!name || aiAnyBusy.value) return
+  const text = String(preset ?? aiInput.value).trim()
+  if (!text) return
+  if (!aiReady.value) {
+    ElMessage.warning('请先在「系统设置」配置 AI 接口')
+    return
+  }
+
+  if (!opts.reuseUser) {
+    aiInput.value = ''
+    await appendAi(name, { id: newMsgId(), role: 'user', text, at: Date.now() })
+  } else {
+    scrollAiToBottom()
+  }
+
+  aiSendingName.value = name
+  aiChatCtrl = new AbortController()
+  try {
+    const res = await api(`/api/v1/ai/context/supplier?name=${encodeURIComponent(name)}`)
+    if (res.code !== 200) throw new Error(res.message || '读取供应商数据失败')
+    const system = buildSupplierChatSystem(res.data)
+    // 每次从最新状态取历史，避免等待期间外部写入导致引用过期
+    const history = (aiChats.value[name] || [])
+      .filter(m => !m.error && m.text)
+      .slice(-12)
+      .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text.slice(0, 2000) }))
+    const reply = await chatComplete({
+      messages: [{ role: 'system', content: system }, ...history],
+      maxTokens: 2400,
+      signal: aiChatCtrl.signal,
+    })
+    await appendAi(name, {
+      id: newMsgId(),
+      role: 'assistant',
+      text: reply,
+      at: Date.now(),
+      model: aiModel.value,
+      chat_kept: res.data.totals?.chat_kept || 0,
+      chat_filtered: res.data.totals?.chat_filtered || 0,
+    })
+  } catch (e) {
+    if (e.message !== '已取消') {
+      await appendAi(name, {
+        id: newMsgId(),
+        role: 'assistant',
+        text: `请求失败：${e.message}`,
+        error: true,
+        retryText: text,
+        at: Date.now(),
+      })
+    }
+  } finally {
+    if (aiSendingName.value === name) aiSendingName.value = ''
+    aiChatCtrl = null
+    scrollAiToBottom()
+  }
+}
+
+async function retryAi(m) {
+  const name = currentName.value
+  aiChats.value = {
+    ...aiChats.value,
+    [name]: (aiChats.value[name] || []).filter(x => x.id !== m.id),
+  }
+  if (m.id) await removeChatMessage(name, m.id)
+  if (m.retryText) await sendAiMessage(m.retryText, { reuseUser: true })
+}
+
+async function clearAiChat() {
+  const name = currentName.value
+  if (!name || aiAnyBusy.value) return
+  try {
+    await ElMessageBox.confirm('清空后这段对话将从本机删除，是否继续？', '清空对话', {
+      type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  aiChats.value = { ...aiChats.value, [name]: [] }
+  await clearChatMessages(name)
+  ElMessage.success('已清空对话')
+}
+
+async function copyAiMessage(m) {
+  try {
+    await navigator.clipboard.writeText(m.text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.warning('复制失败')
+  }
+}
+
+function onAiEnter(e) {
+  if (e.shiftKey || e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  sendAiMessage()
+}
+
+watch(currentName, () => {
+  aiInput.value = ''
+  if (rightTab.value === 'ai') scrollAiToBottom()
+})
+watch(rightTab, (tab) => {
+  if (tab === 'ai') scrollAiToBottom()
+})
+
+function goAiSettings() {
+  location.hash = '#/settings'
+}
+
+function fmtAiTime(ts) {
+  const d = new Date(ts)
+  const p = n => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
 // ── 供应商工厂信息（旺旺「档案」落库内容）──
 const supProfile = ref(null)
 async function loadSupplierProfile(name) {
@@ -260,10 +501,6 @@ function fmtTs(ts) {
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-// ── 批量管理 ──
-const batchMode = ref(false)
-const selectedSet = ref(new Set())
-
 // ── 商品详情（右侧滑出）──
 const drawerVisible = ref(false)
 const currentProduct = ref(null)
@@ -272,9 +509,22 @@ const detailLoading = ref(false)
 
 onMounted(async () => {
   await loadTabOrder()
+  await loadAiState()
+  stopAiSync = subscribeChats(applyExternalChats)
   load()
   // 每 60 秒自动刷新（聊天实时入库后排序保持最新）
   setInterval(load, 60000)
+  // 任意点击 / 右键空白 / 滚动都关闭右键菜单
+  document.addEventListener('click', closeCtx)
+  document.addEventListener('contextmenu', closeCtx)
+  document.addEventListener('scroll', closeCtx, true)
+})
+onBeforeUnmount(() => {
+  stopAiSync?.()
+  stopAiSync = null
+  document.removeEventListener('click', closeCtx)
+  document.removeEventListener('contextmenu', closeCtx)
+  document.removeEventListener('scroll', closeCtx, true)
 })
 
 async function load() {
@@ -294,7 +544,7 @@ async function load() {
     // 默认选中第一个供应商（grouped 接口已把有笔记的排最前；聊天-only 的也纳入）
     const names = mergedEntries.value.map(e => e.name)
     if (!currentName.value || !names.includes(currentName.value)) {
-      currentName.value = names[0] || ''
+      currentName.value = (initialName && names.includes(initialName)) ? initialName : names[0] || ''
       // 初始页签跟随拖拽后的第一位（仅在选择变化时设置，不干扰自动刷新中的当前页签）
       rightTab.value = tabOrder.value[0] || 'note'
       loadMessages(currentName.value)
@@ -375,7 +625,6 @@ function fmtDateTime(ts) {
 
 // ── 商品详情 ──
 async function openProduct(p) {
-  if (batchMode.value) return
   currentProduct.value = p
   drawerVisible.value = true
   detail.value = null
@@ -394,34 +643,27 @@ const viewedDays = computed(() => {
   return detail.value.daily.filter(x => x.view > 0 || x.appear > 0).reverse()
 })
 
-// ── 批量选择 ──
-function isSelected(id) { return selectedSet.value.has(id) }
-function toggleSelect(id) {
-  const next = new Set(selectedSet.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  selectedSet.value = next
+// ── 供应商右键菜单（置顶 / 删除）──
+const ctxMenu = ref(null) // { x, y, name }
+function openCtx(e, name) {
+  const w = 148, h = 82
+  ctxMenu.value = {
+    x: Math.max(8, Math.min(e.clientX, window.innerWidth - w - 8)),
+    y: Math.max(8, Math.min(e.clientY, window.innerHeight - h - 8)),
+    name,
+  }
 }
-function enterBatch() { batchMode.value = true }
-function exitBatch() {
-  batchMode.value = false
-  selectedSet.value = new Set()
+function closeCtx() { ctxMenu.value = null }
+function ctxPinned(name) { return pinnedSuppliers.value.includes(name) }
+async function ctxTogglePin() {
+  const name = ctxMenu.value?.name
+  closeCtx()
+  if (name) await togglePin(name)
 }
-const selectedCount = computed(() => selectedSet.value.size)
-
-async function batchDelete() {
-  const ids = [...selectedSet.value]
-  try {
-    await ElMessageBox.confirm(
-      `确认删除选中的 ${ids.length} 个商品？关联的浏览记录、出现记录和笔记将全部删除，不可恢复。`,
-      '批量删除确认',
-      { type: 'warning', confirmButtonText: '全部删除', cancelButtonText: '取消' }
-    )
-  } catch { return }
-  await api('/api/v1/products/batch-delete', 'POST', { offer_ids: ids })
-  ElMessage.success('删除完成')
-  exitBatch()
-  load()
+async function ctxDelete() {
+  const name = ctxMenu.value?.name
+  closeCtx()
+  if (name) await deleteSupplier(name)
 }
 
 // ── 单个删除 ──
@@ -436,15 +678,21 @@ async function deleteProduct(p) {
   load()
 }
 
-async function deleteSupplier(g) {
+async function deleteSupplier(name) {
+  const entry = mergedEntries.value.find(e => e.name === name)
+  const g = entry?.group
+  const chatCount = entry?.chat?.count || 0
+  const parts = []
+  if (g) parts.push(`名下 ${g.product_count} 个商品及全部浏览记录、笔记`)
+  if (chatCount) parts.push(`${chatCount} 条聊天记录`)
   try {
     await ElMessageBox.confirm(
-      `确认删除供应商「${g.supplier_name}」？名下 ${g.product_count} 个商品及全部浏览记录、笔记将一并删除。`,
+      `确认删除供应商「${name}」？${parts.length ? '将一并删除' + parts.join('、') + '，' : ''}不可恢复。`,
       '删除供应商',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
   } catch { return }
-  await api(`/api/v1/suppliers/${encodeURIComponent(g.supplier_name)}`, 'DELETE')
+  await api(`/api/v1/suppliers/${encodeURIComponent(name)}`, 'DELETE')
   ElMessage.success('供应商已删除')
   currentName.value = ''
   load()
@@ -506,6 +754,7 @@ async function deleteSupplier(g) {
           class="supplier-item"
           :class="{ on: e.name === currentName }"
           @click="selectSupplier(e.name)"
+          @contextmenu.prevent.stop="openCtx($event, e.name)"
         >
           <span v-if="e.pinned" class="s-pin">📌</span>
           <div class="s-info">
@@ -513,6 +762,7 @@ async function deleteSupplier(g) {
             <div class="s-meta">
               <template v-if="e.group">{{ e.group.product_count }} 件商品<template v-if="e.group.comment_count > 0"> · {{ e.group.comment_count }} 条笔记</template></template>
               <template v-if="e.chat">{{ e.group ? ' · ' : '' }}聊天 {{ e.chat.count }} 条<template v-if="e.chat.bytes"> · {{ fmtChatBytes(e.chat.bytes) }}</template></template>
+              <template v-if="!e.group && !e.chat">AI 对话</template>
             </div>
           </div>
           <span
@@ -538,11 +788,6 @@ async function deleteSupplier(g) {
               <template v-if="currentGroup">{{ currentGroup.product_count }} 件商品<template v-if="currentChatSupplier"> · </template></template>
               <template v-if="currentChatSupplier">聊天 {{ currentChatSupplier.count }} 条 · {{ fmtChatBytes(currentChatSupplier.bytes) }}</template>
             </span>
-          </div>
-          <div class="head-actions" v-if="currentGroup">
-            <el-button v-if="!batchMode" size="small" @click="enterBatch">批量管理</el-button>
-            <el-button v-else size="small" @click="exitBatch">退出批量</el-button>
-            <el-button size="small" type="danger" plain :icon="Delete" @click="deleteSupplier(currentGroup)">删除供应商</el-button>
           </div>
         </header>
 
@@ -605,9 +850,8 @@ async function deleteSupplier(g) {
           </div>
         </div>
 
-        <!-- 商品列表（一行一个）—— v-if：聊天-only 供应商没有 currentGroup，v-show 仍会求值 v-for 导致崩溃 -->
-        <div v-if="rightTab === 'goods' && currentGroup" class="product-rows">
-          <!-- 供应商数据概览（总商品/浏览/出现 + 趋势图 + 浏览时间轴） -->
+        <!-- 数据页：供应商统计卡 + 趋势图 + 时段/热力图 + 浏览时间轴（从「商品」页拆出） -->
+        <div v-if="rightTab === 'data'" class="data-panel">
           <div class="sup-stats" v-if="supStats">
             <div class="ss-cards">
               <div class="ss-card"><span class="ss-num">{{ supStats.totals.product_count }}</span><span class="ss-label">商品</span></div>
@@ -629,19 +873,17 @@ async function deleteSupplier(g) {
               <span class="ss-tl-title" :title="t.title">{{ t.title || t.offer_id }}</span>
             </div>
           </div>
+          <div v-else class="pane-empty">该供应商暂无商品浏览数据（仅聊天记录的供应商没有统计数据）</div>
+        </div>
+
+        <!-- 商品列表（一行一个）—— v-if：聊天-only 供应商没有 currentGroup，v-show 仍会求值 v-for 导致崩溃 -->
+        <div v-if="rightTab === 'goods' && currentGroup" class="product-rows">
           <div
             v-for="p in currentGroup.products"
             :key="p.offer_id"
             class="product-row"
             @click="openProduct(p)"
           >
-            <el-checkbox
-              v-if="batchMode"
-              :model-value="isSelected(p.offer_id)"
-              class="row-check"
-              @change="toggleSelect(p.offer_id)"
-              @click.stop
-            />
             <el-image
               v-if="p.main_img_url"
               :src="p.main_img_url"
@@ -666,7 +908,6 @@ async function deleteSupplier(g) {
               <span class="d-view" title="浏览次数">浏览 {{ p.view_count }}</span>
             </div>
             <a
-              v-if="!batchMode"
               :href="productUrl(p.offer_id)"
               target="_blank"
               class="row-jump"
@@ -675,14 +916,25 @@ async function deleteSupplier(g) {
             >
               跳转商品<el-icon><TopRight /></el-icon>
             </a>
-            <el-icon v-if="!batchMode" class="row-arrow"><ArrowRight /></el-icon>
+            <el-icon class="row-arrow"><ArrowRight /></el-icon>
           </div>
         </div>
 
         <!-- 聊天记录页 -->
         <div v-if="rightTab === 'chat'" class="chat-panel" v-loading="chatLoading">
+          <div v-if="chatMessages.length" class="chat-filter-bar">
+            <span>
+              共 {{ chatMessages.length }} 条
+              <template v-if="chatClassified.stats.filtered"> · 系统/自动回复/寒暄等无用消息 {{ chatClassified.stats.filtered }} 条</template>
+            </span>
+            <label class="cf-toggle">
+              <el-switch v-model="chatHideNoise" size="small" />
+              <span>隐藏无用消息</span>
+            </label>
+          </div>
           <div v-if="!chatMessages.length" class="pane-empty">暂无聊天记录（客服页会话收发消息后自动保存）</div>
-          <div v-for="m in chatMessages" :key="m.id" class="c-msg" :class="{ self: m.sender === 'me' }">
+          <div v-else-if="!chatDisplay.length" class="pane-empty">已隐藏全部 {{ chatMessages.length }} 条消息（均为系统提示 / 自动回复 / 寒暄等）</div>
+          <div v-for="m in chatDisplay" :key="m.id" class="c-msg" :class="{ self: m.sender === 'me' }">
             <div class="c-meta">
               <span class="c-nick">{{ m.sender === 'me' ? '我' : (m.nick || m.display_name || '对方') }}</span>
               <span class="c-time">{{ m.time }}</span>
@@ -695,6 +947,77 @@ async function deleteSupplier(g) {
             </div>
             <div v-if="m.images && m.images.length" class="c-imgs">
               <img v-for="(img, i) in m.images" :key="i" class="c-img" :src="img.src || img.url" loading="lazy" />
+            </div>
+          </div>
+        </div>
+
+        <!-- AI 页：对话形式，按供应商保留独立会话（档案 + 商品 + 备注 + 过滤后的聊天为上下文） -->
+        <div v-if="rightTab === 'ai'" class="ai-panel">
+          <div class="ai-head">
+            <div class="ai-head-info">
+              <span class="ai-head-title">AI 采购助手</span>
+              <span class="ai-head-sub">
+                <template v-if="currentChatSupplier">聊天 {{ currentChatSupplier.count }} 条</template>
+                <template v-if="currentGroup"> · 商品 {{ currentGroup.product_count }} 件</template>
+                · 已过滤系统/自动回复/寒暄/重复
+              </span>
+            </div>
+            <div class="ai-head-actions">
+              <el-tag v-if="aiModel" size="small" type="info" effect="plain">{{ aiModel }}</el-tag>
+              <el-button v-if="aiBusy" size="small" @click="stopAi">停止</el-button>
+              <el-button size="small" :disabled="!aiMessages.length || aiAnyBusy" @click="clearAiChat">清空对话</el-button>
+            </div>
+          </div>
+
+          <div ref="aiChatListEl" class="ai-chat-list">
+            <div v-if="!aiReady" class="pane-empty">
+              尚未配置 AI 接口，<el-button link type="primary" @click="goAiSettings">去系统设置</el-button> 填写接口地址与 API Key 后即可对话。
+            </div>
+
+            <div v-else-if="!aiMessages.length" class="ai-chat-welcome">
+              <div class="acw-title">和 AI 聊聊这家供应商</div>
+              <div class="acw-sub">已读取档案、商品浏览、我的备注和过滤后的聊天记录；AI 只依据这些资料回答，缺什么会直接说「资料未提及」。</div>
+              <div class="acw-chips">
+                <span v-for="q in AI_QUICK_QUESTIONS" :key="q" class="acw-chip" @click="sendAiMessage(q)">{{ q }}</span>
+              </div>
+            </div>
+
+            <div v-for="m in aiMessages" :key="m.id" class="chat-msg" :class="m.role">
+              <div class="cm-avatar">{{ m.role === 'user' ? '我' : 'AI' }}</div>
+              <div class="cm-main">
+                <div class="cm-bubble" :class="{ err: m.error }">{{ m.text }}</div>
+                <div class="cm-meta">
+                  <span>{{ fmtAiTime(m.at) }}</span>
+                  <span v-if="m.model"> · {{ m.model }}</span>
+                  <el-button v-if="m.error" link size="small" @click="retryAi(m)">重试</el-button>
+                  <el-button link size="small" @click="copyAiMessage(m)">复制</el-button>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="aiBusy" class="chat-msg assistant">
+              <div class="cm-avatar">AI</div>
+              <div class="cm-main">
+                <div class="cm-bubble typing"><span></span><span></span><span></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="aiReady" class="ai-chat-input">
+            <div class="acq-row">
+              <span v-for="q in AI_QUICK_QUESTIONS" :key="q" class="acq" @click="aiInput = q">{{ q }}</span>
+            </div>
+            <div class="aci-box">
+              <el-input
+                v-model="aiInput"
+                type="textarea"
+                :rows="2"
+                resize="none"
+                :disabled="aiAnyBusy"
+                placeholder="问这家供应商：价格、起订量、交期、定制能力、风险…（Enter 发送，Shift+Enter 换行）"
+                @keydown.enter="onAiEnter"
+              />
+              <el-button type="primary" :loading="aiBusy" :disabled="!aiInput.trim() || aiAnyBusy" @click="sendAiMessage()">发送</el-button>
             </div>
           </div>
         </div>
@@ -777,10 +1100,16 @@ async function deleteSupplier(g) {
       </div>
     </el-drawer>
 
-    <!-- 批量浮条 -->
-    <div v-if="batchMode" class="batch-bar">
-      <span>已选 {{ selectedCount }} 个商品</span>
-      <el-button type="danger" size="small" :disabled="selectedCount === 0" @click="batchDelete">删除选中</el-button>
+    <!-- 供应商右键菜单 -->
+    <div
+      v-if="ctxMenu"
+      class="ctx-menu"
+      :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <div class="ctx-item" @click="ctxTogglePin">{{ ctxPinned(ctxMenu.name) ? '📌 取消置顶' : '📌 置顶' }}</div>
+      <div class="ctx-item danger" @click="ctxDelete">删除供应商</div>
     </div>
   </section>
 </template>
@@ -899,6 +1228,111 @@ async function deleteSupplier(g) {
 .filter-empty { font-size: 11px; color: #bbb; padding: 2px 0; }
 .filter-reset { align-self: flex-start; font-size: 11px; padding: 0; height: 20px; }
 
+/* 数据页 */
+.data-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px; }
+
+/* AI 对话页 */
+.ai-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.ai-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #f2f3f5;
+  padding: 10px 16px;
+  flex-shrink: 0;
+}
+.ai-head-title { font-size: 14px; font-weight: 600; color: #303133; }
+.ai-head-sub { font-size: 11px; color: #a8abb2; margin-left: 8px; }
+.ai-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+.ai-chat-list { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 6px; background: #fcfcfd; }
+.ai-chat-welcome { text-align: center; padding: 28px 12px 20px; }
+.acw-title { font-size: 15px; font-weight: 600; color: #303133; }
+.acw-sub { font-size: 12px; color: #909399; margin: 6px auto 0; line-height: 1.7; max-width: 520px; }
+.acw-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+.acw-chip {
+  font-size: 12px;
+  color: #a87b3f;
+  background: #faf1e6;
+  border: 1px solid #f0e4d4;
+  border-radius: 14px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.acw-chip:hover { background: #f5e6d4; }
+
+.chat-msg { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 14px; }
+.chat-msg.user { flex-direction: row-reverse; }
+.cm-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #f3e6d6;
+  color: #a87b3f;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.chat-msg.user .cm-avatar { background: #c9975c; color: #fff; }
+.cm-main { max-width: 78%; display: flex; flex-direction: column; align-items: flex-start; }
+.chat-msg.user .cm-main { align-items: flex-end; }
+.cm-bubble {
+  background: #fff;
+  border: 1px solid #f0e4d4;
+  border-radius: 4px 10px 10px 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #303133;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-msg.user .cm-bubble {
+  background: #c9975c;
+  border-color: #c9975c;
+  color: #fff;
+  border-radius: 10px 4px 10px 10px;
+}
+.cm-bubble.err { background: #fef0f0; border-color: #fbc4c4; color: #c45656; }
+.cm-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #b9b9b9; margin-top: 4px; }
+.cm-meta .el-button { margin: 0; font-size: 11px; }
+.chat-msg.user .cm-meta { justify-content: flex-end; }
+
+.cm-bubble.typing { display: flex; align-items: center; gap: 4px; padding: 12px; }
+.cm-bubble.typing span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #c9975c;
+  animation: ai-blink 1.2s infinite ease-in-out;
+}
+.cm-bubble.typing span:nth-child(2) { animation-delay: .2s; }
+.cm-bubble.typing span:nth-child(3) { animation-delay: .4s; }
+@keyframes ai-blink {
+  0%, 80%, 100% { opacity: .25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+
+.ai-chat-input { flex-shrink: 0; border-top: 1px solid #f2f3f5; padding: 8px 16px 12px; background: #fff; }
+.acq-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.acq {
+  font-size: 11px;
+  color: #909399;
+  background: #f7f8fa;
+  border-radius: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.acq:hover { color: #a87b3f; background: #faf1e6; }
+.aci-box { display: flex; align-items: flex-end; gap: 8px; }
+.aci-box .el-textarea { flex: 1; }
+.aci-box :deep(.el-textarea__inner) { font-size: 13px; line-height: 1.6; border-radius: 8px; }
+.aci-box .el-button { height: 40px; }
+
 /* 工厂信息页 */
 .factory-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px; }
 .f-head { border-bottom: 1px solid #f2f3f5; padding-bottom: 8px; margin-bottom: 10px; }
@@ -937,7 +1371,6 @@ async function deleteSupplier(g) {
 }
 .head-title { font-size: 16px; font-weight: 600; color: #303133; }
 .head-meta { font-size: 12px; font-weight: 400; color: #a8abb2; margin-left: 10px; }
-.head-actions { margin-left: auto; display: flex; gap: 8px; }
 
 /* 供应商笔记 */
 .supplier-note {
@@ -993,6 +1426,18 @@ async function deleteSupplier(g) {
 
 /* 聊天记录页 */
 .chat-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px; }
+.chat-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: #a8abb2;
+  padding: 0 0 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #f5f5f5;
+}
+.cf-toggle { display: flex; align-items: center; gap: 6px; color: #909399; cursor: pointer; }
 .c-msg {
   padding: 8px 10px;
   border-radius: 6px;
@@ -1066,7 +1511,6 @@ async function deleteSupplier(g) {
   border: 1px solid transparent;
 }
 .product-row:hover { background: #faf7f3; border-color: #f0e6d8; }
-.row-check { flex-shrink: 0; }
 .row-img {
   width: 52px;
   height: 52px;
@@ -1186,21 +1630,26 @@ async function deleteSupplier(g) {
 .d-empty { font-size: 13px; color: #bbb; }
 .d-delete { margin-top: 24px; width: 100%; }
 
-/* 批量浮条 */
-.batch-bar {
+/* 供应商右键菜单 */
+.ctx-menu {
   position: fixed;
-  bottom: 24px;
-  left: calc(50% + 100px);
-  transform: translateX(-50%);
-  background: #303133;
-  color: #fff;
-  border-radius: 24px;
-  padding: 10px 20px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
+  z-index: 3000;
+  min-width: 140px;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .14);
+  padding: 4px;
   font-size: 13px;
-  box-shadow: 0 4px 16px rgba(0,0,0,.2);
-  z-index: 2000;
 }
+.ctx-item {
+  padding: 8px 12px;
+  border-radius: 5px;
+  color: #303133;
+  cursor: pointer;
+  user-select: none;
+}
+.ctx-item:hover { background: #faf7f3; color: #c9975c; }
+.ctx-item.danger { color: #f56c6c; }
+.ctx-item.danger:hover { background: #fef0f0; color: #f56c6c; }
 </style>
