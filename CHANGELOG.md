@@ -2,6 +2,14 @@
 
 所有版本的更新记录都写在这里。发新版本时：更新 `wxt/package.json` 的 `version` → 在本文件顶部加一节 → 提交并打 `vx.y.z` 标签推送 → 在 GitHub 创建同名 Release。
 
+## v1.2.2 补充（2026-11-10）：升级方式工程化
+
+- 新增 `tools/一键升级-macOS.command`：自动查最新 Release → 下载 → 校验扩展 ID → 备份 → 整目录覆盖 → 提示重载（可选自动重启浏览器）
+- 新增 `tools/一键升级-Windows.bat` + `update-windows.ps1`：同等能力，兼容 QQ 浏览器 / Chrome / Edge
+- 脚本内置 ID 校验：安装包 ID 与已装扩展不一致时直接中止，避免装成第二个扩展
+- README 新增「从旧版本升级（数据全部保留）」：说明 ID 恒定原理、一键脚本、手动三步，以及「移除扩展会丢数据」等禁忌
+- CRX 停止发布：1.0.x 签名私钥丢失，新私钥签出的 crx_id 与 manifest key 不一致（`omlkcfh...` vs `jfmjpid...`），会导致装成新扩展
+
 ## v1.2.2（2026-11-08，standalone-local 分支）
 
 ### 新增了什么
