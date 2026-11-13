@@ -47,6 +47,7 @@ onMounted(async () => {
   // 设置当前商品
   store.currentOfferId = data.productId
   store.currentSupplierName = data.CompanyName || ''
+  store.currentSupplierMemberId = data.memberId || ''
 
   try {
     // 上传浏览记录（后端自动处理商品入库 + 字段补充）

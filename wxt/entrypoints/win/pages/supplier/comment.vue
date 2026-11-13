@@ -10,9 +10,10 @@ const store = useApiStore()
   <div class="comment-page">
     <CommentInput
       v-if="store.currentSupplierName"
-      :key="store.currentSupplierName"
+      :key="store.currentSupplierName + '|' + store.currentSupplierMemberId"
       kind="supplier"
       :target="store.currentSupplierName"
+      :memberId="store.currentSupplierMemberId"
     />
     <div class="others-wrap">
       <OthersComments

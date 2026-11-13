@@ -3,7 +3,10 @@
 // 存储用量显示 / 软上限自动清理 / JSON 导入导出 都在这里。
 
 const DB_NAME = 'alocs-local'
-const DB_VERSION = 4 // v4: 新增 chat_messages（旺旺客服聊天记录，永久保存）
+// v5：仅提升版本号。IndexedDB 不能降级——此前有过一次用低版本包覆盖安装，
+// 导致 open(4) 打不开已升到 5 的库、所有本地接口全挂（VersionError）。
+// 所以这里固定用 5，向后兼容 v4 的库（v4 的 chat_messages 已存在，无需迁移）。
+const DB_VERSION = 5
 
 // store 名 → keyPath（null 表示自增主键）
 export const STORES = {

@@ -183,6 +183,7 @@ const pageSwitches = ref({
   enableOfferList: true,
   enableHomeRecommend: true,
   enableShopPage: true,
+  enableFactorySearch: true,
   enableStopLoading: true,
   enableCleanUrl: true,
 })
@@ -467,6 +468,7 @@ onMounted(async () => {
     pageSwitches.value.enableOfferList = stored.appSettings.enableOfferList ?? true
     pageSwitches.value.enableHomeRecommend = stored.appSettings.enableHomeRecommend ?? true
     pageSwitches.value.enableShopPage = stored.appSettings.enableShopPage ?? true
+    pageSwitches.value.enableFactorySearch = stored.appSettings.enableFactorySearch ?? true
     pageSwitches.value.enableStopLoading = stored.appSettings.enableStopLoading ?? true
     pageSwitches.value.enableCleanUrl = stored.appSettings.enableCleanUrl ?? true
   }
@@ -495,6 +497,7 @@ async function autoSave() {
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
     enableShopPage: pageSwitches.value.enableShopPage,
+    enableFactorySearch: pageSwitches.value.enableFactorySearch,
     enableStopLoading: pageSwitches.value.enableStopLoading,
     enableCleanUrl: pageSwitches.value.enableCleanUrl,
   }
@@ -505,6 +508,7 @@ async function autoSave() {
     enableOfferList: pageSwitches.value.enableOfferList,
     enableHomeRecommend: pageSwitches.value.enableHomeRecommend,
     enableShopPage: pageSwitches.value.enableShopPage,
+    enableFactorySearch: pageSwitches.value.enableFactorySearch,
     enableStopLoading: pageSwitches.value.enableStopLoading,
     enableCleanUrl: pageSwitches.value.enableCleanUrl,
   })
@@ -745,6 +749,10 @@ async function autoSave() {
         <el-form-item label="供应商店铺页">
           <el-switch v-model="pageSwitches.enableShopPage" active-text="开启" inactive-text="关闭" @change="autoSave" />
           <div class="switch-desc">shop***.1688.com 供应商店铺首页 / 全部商品(offerlist)页</div>
+        </el-form-item>
+        <el-form-item label="找工厂页">
+          <el-switch v-model="pageSwitches.enableFactorySearch" active-text="开启" inactive-text="关闭" @change="autoSave" />
+          <div class="switch-desc">s.1688.com/company/pc/factory_search.htm 工厂卡片右侧备注（与商品页「供应商」页签同一份）</div>
         </el-form-item>
         <el-form-item label="停止页面加载">
           <el-switch v-model="pageSwitches.enableStopLoading" active-text="开启" inactive-text="关闭" @change="autoSave" />

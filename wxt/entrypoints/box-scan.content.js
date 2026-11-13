@@ -13,11 +13,80 @@ const LIST_HOSTS = ['s.1688.com', 'search.1688.com', 'www.1688.com']
 const DETAIL_HOST = 'detail.1688.com'
 const MARK_ATTR = 'data-alocs-offer-id'
 
+// ── 备注区防跳转守卫 ──
+// 找工厂卡片的点击跳转是 React 合成事件（委托挂在页面 root 容器），隔离世界的 @click.stop 拦不住。
+// 关键约束：不能在 window capture 阶段 stopPropagation——那会把事件在抵达按钮/编辑器之前就掉掉，
+// 导致备注区里的按钮点不动（历史 bug）。正确做法：
+//   1) 事件真的落在备注区内，放行，交给备注区自己的监听器在【冒泡到备注容器】时阻住
+//      （target 已先处理好，React root 在更外层，收不到）；
+//   2) 只有事件“落在备注列矩形内但 target 不是备注元素”（被卡片透明遮罩吃掉）时，
+//      才在 capture 阶段阻断，避免遮罩把点击导去跳转。
+const NOTE_MOUNT_CLASSES = ['alocs-factory-mount', 'fn-col']
+const NOTE_SELECTOR = '.alocs-factory-mount, .fn-col'
+
+function installNoteGuard() {
+  // 事件路径里是否经过备注容器
+  const pathInNote = e => {
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : []
+    for (const n of path) {
+      if (n instanceof Element && n.classList) {
+        for (const c of NOTE_MOUNT_CLASSES) if (n.classList.contains(c)) return true
+      }
+    }
+    const t = e.target
+    return !!(t instanceof Element && t.closest(NOTE_SELECTOR))
+  }
+  // 落点落在备注列矩形内（用于被遮罩覆盖的场景）
+  const pointInNote = e => {
+    if (typeof e.clientX !== 'number' || (!e.clientX && !e.clientY)) return false
+    for (const el of document.querySelectorAll('.alocs-factory-mount')) {
+      const r = el.getBoundingClientRect()
+      if (r.width > 0 && r.height > 0 &&
+          e.clientX >= r.left && e.clientX <= r.right &&
+          e.clientY >= r.top && e.clientY <= r.bottom) return true
+    }
+    return false
+  }
+  const block = e => {
+    // 真在备注区里：放行，不能阻断（否则按钮/输入框全部失效）
+    if (pathInNote(e)) return
+    if (!pointInNote(e)) return
+    e.stopPropagation()
+    if (e.type === 'click' || e.type === 'auxclick' || e.type === 'dblclick') {
+      try { e.preventDefault() } catch {}
+    }
+  }
+  const types = [
+    'pointerdown', 'pointerup', 'mousedown', 'mouseup',
+    'click', 'auxclick', 'dblclick', 'dragstart', 'touchstart', 'touchend',
+  ]
+  for (const type of types) window.addEventListener(type, block, true)
+
+  // 另一道防线：事件冒泡到备注容器时阻住，不让它继续冒到卡片/React root（防跳转），
+  // 此时 target 自己的 click 已经执行完毕，所以按钮/编辑器不受影响。
+  const stopAtMount = e => { e.stopPropagation() }
+  const seen = new WeakSet()
+  const hookMounts = () => {
+    for (const el of document.querySelectorAll('.alocs-factory-mount')) {
+      if (seen.has(el)) continue
+      seen.add(el)
+      for (const type of types) el.addEventListener(type, stopAtMount, false)
+    }
+  }
+  hookMounts()
+  new MutationObserver(hookMounts).observe(document.documentElement, { childList: true, subtree: true })
+
+  console.log('[box:scan] 备注区防跳转守卫已安装（冒泡拦截 + 遮罩坐标兜底）')
+}
+
 export default defineContentScript({
   matches: ['*://*.1688.com/*'],
   world: 'MAIN',
   main() {
     const host = location.hostname
+    // 备注区防跳转守卫：全站常驻（不按路径/主机判断），只在事件落在备注区时生效
+    installNoteGuard()
+
     // 列表页走 box-content 的 DOM 选择器规则，详情页归 win-content，都不需要 fiber 扫描
     if (host === DETAIL_HOST || LIST_HOSTS.includes(host)) return
     // 旺旺客服页（IM）：没有商品卡片网格，但需要主世界读聊天 iframe 的会话数据

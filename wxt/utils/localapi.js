@@ -21,12 +21,45 @@ async function log(action, detail) {
   await db.add('operation_logs', { action, detail, created_at: Date.now() })
 }
 
+// 备注变更广播：找工厂页与商品详情浮窗是两个 content script，
+// 用 storage.local 写一个信号（storage.onChanged 在 content script 里也能收到），
+// 另一侧监听到后立即重读数据库，不用刷新就能看到同一份文字。
+// （runtime.sendMessage 从 background 发不到 content script，所以必须走 storage）
+function broadcastCommentChanged(kind, target, memberId) {
+  try {
+    browser.storage.local.set({ __commentChanged: { kind, target: target || '', memberId: memberId || '', ts: Date.now() } })
+  } catch {}
+}
+
 // ── 查询辅助 ──
-async function myComments(kind, target) {
+// 一条供应商备注是否属于该供应商：memberId 相同 / 名字相近（sameSupplierName）/ 命中历史别名
+function isSupplierCommentOf(c, target, memberId) {
+  if (!c || c.kind !== 'supplier') return false
+  if (memberId && c.member_id && c.member_id === memberId) return true
+  if (sameSupplierName(c.target, target)) return true
+  return Array.isArray(c.aliases) && c.aliases.some(a => sameSupplierName(a, target))
+}
+
+// 同一供应商的全部备注，按「最近修改」倒序（merged_into 是已被合并的旧记录，忽略）
+function supplierCommentHits(list, target, memberId) {
+  return list
+    .filter(c => !c.merged_into && isSupplierCommentOf(c, target, memberId))
+    .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at))
+}
+
+async function myComments(kind, target, memberId = '') {
   const list = await db.all('comments')
+  if (kind === 'supplier') return supplierCommentHits(list, target, memberId)
   return list
     .filter(c => c.kind === kind && c.target === target)
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+}
+
+// 用代表商品 offerId 反查已入库的公司名（找工厂卡的工厂名与详情页公司名可能不是同一个主体）
+async function supplierNameByOffer(offerId) {
+  if (!offerId) return ''
+  const p = await db.get('products', String(offerId))
+  return (p && p.supplier_name) || ''
 }
 
 async function upsertProduct(offer_id, title, main_img_url, supplier_name) {
@@ -726,16 +759,18 @@ async function route(path, method, body, query) {
     const target = decodeURIComponent(mProductCommentAuto[1])
     const existing = (await db.all('comments')).find(x => x.kind === 'product' && x.target === target)
     const blank = !hasCommentContent(body.text)
-    if (blank && existing) { await db.delete('comments', existing.id); return ok(null) }
+    if (blank && existing) { await db.delete('comments', existing.id); broadcastCommentChanged('product', target); return ok(null) }
     if (blank) return ok(null)
     if (existing) {
       existing.text = body.text
       existing.updated_at = new Date().toISOString()
       await db.put('comments', existing)
+      broadcastCommentChanged('product', target)
       return ok(existing)
     }
     const c = { id: uid(), kind: 'product', target, text: body.text, created_at: new Date().toISOString(), updated_at: null }
     await db.put('comments', c)
+    broadcastCommentChanged('product', target)
     return ok(c)
   }
 
@@ -752,8 +787,7 @@ async function route(path, method, body, query) {
     let list = [...names].filter(Boolean).map(name => {
       const myProducts = [...new Set(products.filter(p => p.supplier_name === name).map(p => p.offer_id))]
         .filter(oid => records.some(r => r.offer_id === oid))
-      const cmts = comments.filter(c => c.kind === 'supplier' && c.target === name)
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      const cmts = supplierCommentHits(comments, name, (suppliers.find(s => s.name === name) || {}).memberId || '')
       const prods = products.filter(p => p.supplier_name === name && myProducts.includes(p.offer_id))
         .sort((a, b) => (lastViewOf(b.offer_id, records)) - (lastViewOf(a.offer_id, records)))
         .slice(0, 20)
@@ -776,9 +810,75 @@ async function route(path, method, body, query) {
     return ok(list.slice((pageNum - 1) * pageSize, pageNum * pageSize), { total, stats })
   }
 
+  // ── 找工厂页：按工厂名批量读取备注 + 统计 + 近 30 天浏览趋势 ──
+  // 工厂卡只能拿到「工厂名」，与详情页的「公司名」可能不是同一个主体：
+  // 用卡片代表商品（_topOfferId_）反查 products.supplier_name 当别名，两处才能读到同一条
+  if (path === '/api/v1/suppliers/batch_info' && method === 'POST') {
+    const names = [...new Set((body.names || []).filter(Boolean).map(n => String(n).trim()))]
+    const memberIds = body.memberIds || {}
+    const offerIds = body.offerIds || {}
+    const [comments, products, records, chats] = await Promise.all([
+      db.all('comments'), db.all('products'), db.all('view_records'), db.all('chat_messages'),
+    ])
+    const viewedOfferIds = new Set(records.map(r => r.offer_id))
+    const offerSupplier = {}
+    for (const p of products) offerSupplier[p.offer_id] = p.supplier_name || ''
+    const day0 = new Date(); day0.setHours(0, 0, 0, 0)
+    const startTs = day0.getTime() - 29 * DAY
+    const pad = n => String(n).padStart(2, '0')
+    const dateLabels = []
+    for (let i = 0; i < 30; i++) {
+      const d = new Date(startTs + i * DAY)
+      dateLabels.push(`${pad(d.getMonth() + 1)}-${pad(d.getDate())}`)
+    }
+    // 近 30 天浏览流水按（供应商名, 日）预聚合
+    const perNameDays = {}
+    for (const r of records) {
+      if (!r.viewed_at || r.viewed_at < startTs) continue
+      const nm = offerSupplier[r.offer_id]
+      if (!nm) continue
+      const idx = Math.floor((r.viewed_at - startTs) / DAY)
+      if (idx < 0 || idx > 29) continue
+      if (!perNameDays[nm]) perNameDays[nm] = new Array(30).fill(0)
+      perNameDays[nm][idx]++
+    }
+    const result = {}
+    for (const name of names) {
+      const mid = memberIds[name] || ''
+      const aliasName = offerSupplier[offerIds[name] || ''] || ''
+      const matchers = [name, aliasName].filter(Boolean)
+      let myCmts = supplierCommentHits(comments, name, mid)
+      if (!myCmts.length && aliasName) myCmts = supplierCommentHits(comments, aliasName, mid)
+      const viewedCount = new Set(
+        products.filter(p => viewedOfferIds.has(p.offer_id) && matchers.some(m => sameSupplierName(p.supplier_name, m))).map(p => p.offer_id)
+      ).size
+      const days = new Array(30).fill(0)
+      for (const m of matchers) {
+        const d = perNameDays[m]
+        if (d) for (let i = 0; i < 30; i++) days[i] += d[i]
+      }
+      const chatCount = chats.filter(c => matchers.some(m => sameSupplierName(c.supplier_name, m) || sameSupplierName(c.display_name, m))).length
+      result[name] = {
+        my_comments: myCmts,
+        comment_count: myCmts.length,
+        viewed_product_count: viewedCount,
+        views_timeline: dateLabels.map((date, i) => ({ date, count: days[i] })),
+        chat_count: chatCount,
+      }
+    }
+    return ok(result)
+  }
+
   const mSupComments = path === '/api/v1/suppliers/comments'
   if (mSupComments && method === 'GET') {
-    return ok(await myComments('supplier', query.supplier_name || ''))
+    const target = query.supplier_name || ''
+    const memberId = query.member_id || ''
+    // 找工厂页只能拿到「工厂名」，与详情页的「公司名」可能不同：
+    // 用卡片代表商品反查已入库的 supplier_name 再试一次，保证两处读的是同一条
+    const repName = await supplierNameByOffer(query.rep_offer || '')
+    let list = await myComments('supplier', target, memberId)
+    if (!list.length && repName && !sameSupplierName(repName, target)) list = await myComments('supplier', repName, memberId)
+    return ok(list)
   }
   if (mSupComments && method === 'POST') {
     const c = { id: uid(), kind: 'supplier', target: body.supplier_name, text: body.text, created_at: new Date().toISOString(), updated_at: null }
@@ -806,20 +906,49 @@ async function route(path, method, body, query) {
   const mSupCommentAuto = path === '/api/v1/suppliers/comments/auto'
   if (mSupCommentAuto && method === 'PUT') {
     const target = query.supplier_name || ''
-    const existing = (await db.all('comments')).find(x => x.kind === 'supplier' && x.target === target)
+    const memberId = body.member_id || query.member_id || ''
+    const repName = await supplierNameByOffer(body.rep_offer || query.rep_offer || '')
+    // 找工厂页与详情页共用同一条记录：memberId / 名字相近 / 历史别名
+    const hits = supplierCommentHits(await db.all('comments'), target, memberId)
     const blank = !hasCommentContent(body.text)
-    if (blank && existing) { await db.delete('comments', existing.id); return ok(null) }
-    if (blank) return ok(null)
+    if (blank) {
+      // 清空：只删“确定是同一家”的记录（严格同名或同 memberId），不动仅名字相近的
+      for (const c of hits.filter(c => normSupplierName(c.target) === normSupplierName(target) || (memberId && c.member_id === memberId))) {
+        await db.delete('comments', c.id)
+      }
+      broadcastCommentChanged('supplier', target, memberId)
+      return ok(null)
+    }
+    const existing = hits[0]
     if (existing) {
+      // 同一家因两处页面写法不同而存了多条 → 保留最新一条，其余标记合并（读取时忽略）
+      for (const c of hits.slice(1)) {
+        c.merged_into = existing.id
+        await db.put('comments', c)
+      }
       existing.text = body.text
       existing.updated_at = new Date().toISOString()
+      if (memberId) existing.member_id = memberId
+      if (!existing.target && target) existing.target = target
+      // 别名一旦连上就永久绑定：以后名字有出入也能命中
+      const aliasAdd = [target, repName].filter(n => n && !sameSupplierName(existing.target, n))
+      if (aliasAdd.length) {
+        const aliases = new Set(existing.aliases || [])
+        aliasAdd.forEach(n => aliases.add(n))
+        existing.aliases = [...aliases]
+      }
       await db.put('comments', existing)
+      broadcastCommentChanged('supplier', existing.target, memberId)
+      for (const a of (existing.aliases || [])) broadcastCommentChanged('supplier', a, memberId)
       return ok(existing)
     }
-    const c = { id: uid(), kind: 'supplier', target, text: body.text, created_at: new Date().toISOString(), updated_at: null }
+    const c = { id: uid(), kind: 'supplier', target, member_id: memberId, text: body.text, created_at: new Date().toISOString(), updated_at: null }
+    if (repName && !sameSupplierName(target, repName)) c.aliases = [repName]
     await db.put('comments', c)
+    broadcastCommentChanged('supplier', target, memberId)
+    if (repName) broadcastCommentChanged('supplier', repName, memberId)
     if (target && !(await db.get('suppliers', target))) {
-      await db.put('suppliers', { name: target, address: '', memberId: '', created_at: Date.now() })
+      await db.put('suppliers', { name: target, address: '', memberId: memberId || '', created_at: Date.now() })
     }
     return ok(c)
   }

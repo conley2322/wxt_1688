@@ -14,6 +14,9 @@ export const useApiStore = defineStore('api', () => {
   // ══════════════════════════════════════
   const currentOfferId = ref('')
   const currentSupplierName = ref('')
+  // 供应商 memberId：与名字一起作为备注的稳定键。找工厂页只能拿到工厂名，
+  // 详情页有 memberId，两者同时参与匹配才不会因名字写法不同而各存一条
+  const currentSupplierMemberId = ref('')
 
   // ══════════════════════════════════════
   // 商品评论
@@ -151,6 +154,7 @@ export const useApiStore = defineStore('api', () => {
     currentUser,
     currentOfferId,
     currentSupplierName,
+    currentSupplierMemberId,
     productComments,
     supplierComments,
 

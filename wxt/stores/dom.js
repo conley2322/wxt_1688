@@ -30,6 +30,24 @@ export const useDomStore = defineStore('dom', () => {
     return ''
   }
 
+  // 从页面内嵌 JSON 提取公司名（React 详情页 DOM 选择器不稳定，内嵌数据最可靠）
+  // 详情页是客户端渲染，#shopNavigation 等只是 JSON 结构描述、未必有对应静态 DOM；
+  // 而公司名稳定存在于启动脚本的 companyName / authCompanyName 字段。
+  // 取首个 companyName（主商品卖家），与找工厂卡片标题同为干净全称，trim 后即可对齐。
+  function extractCompanyName() {
+    try {
+      const scripts = document.querySelectorAll('script')
+      for (const s of scripts) {
+        const txt = s.textContent || ''
+        if (!txt.includes('companyName')) continue
+        const m = txt.match(/["']companyName["']\s*:\s*["']([^"']+)["']/)
+          || txt.match(/["']authCompanyName["']\s*:\s*["']([^"']+)["']/)
+        if (m && m[1]) return m[1].trim()
+      }
+    } catch { }
+    return ''
+  }
+
   async function get_dom_all_data() {
     console.log('get_dom_all_data: 开始 获取页面数据');
     try {
@@ -52,7 +70,8 @@ export const useDomStore = defineStore('dom', () => {
       const archiveOrdinaryFactoryName1 = document.querySelector('#shopNavigation > div > div > div.winport-title.v-flex > a.shop-company-name.v-flex.shop-name-wrapper > h1')
       const archiveOrdinaryFactoryName2 = document.querySelector('#shopNavigation > div > a > div.winport-title.v-flex > a.shop-company-name.v-flex h1')
 
-      const CompanyNames = archiveOrdinaryFactoryName?.innerText
+      const CompanyNames = extractCompanyName()
+        || archiveOrdinaryFactoryName?.innerText
         || archivesuperFactoryName?.innerText
         || homesuperFactoryName?.innerText
         || archiveOrdinaryFactoryName1?.innerText
@@ -92,7 +111,7 @@ export const useDomStore = defineStore('dom', () => {
       }
 
       return {
-        CompanyName: CompanyNames || '',
+        CompanyName: (CompanyNames || '').trim(),
         CompanyAddress: CompanyAddress1 || '',
         title: titles || '',
         imageUrl: imageUrl || '',
