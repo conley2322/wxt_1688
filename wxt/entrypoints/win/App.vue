@@ -16,10 +16,11 @@ const store = useApiStore()
 const domStore = useDomStore()
 const viewerStats = ref([])
 const productDom = ref({})
-// ── 详情页停留计时（活跃度规则）：
-//    页面可见 + 最近 3 秒内有鼠标/键盘动作 → 每秒 +1；
-//    鼠标静止超 3 秒（挂机）或切到别的标签页 → 暂停；
-//    关闭/切走时把本次时长回填浏览流水（后台可看）──
+// ── 详情页停留计时（周期规则）：
+//    一个周期 = 从打开详情页到彻底关闭；进入即开始计时（鼠标移出再移回不算新周期）；
+//    切到其他标签页只是暂停，暂停期间不写库；关闭时把整个周期的累计时长写入流水，
+//    并入 (offer_id, viewed_at) 那条记录（5 分钟合并窗口内的刷新也累到同一条），
+//    显示上每个周期只有一条时长、无数据不显示 ──
 const dwellSeconds = ref(0)
 const dwellViewedAt = ref(0)
 const dwellText = computed(() => {
@@ -27,11 +28,7 @@ const dwellText = computed(() => {
   const m = Math.floor(s / 60)
   return m > 0 ? `${m}分${String(s % 60).padStart(2, '0')}秒` : `${s}秒`
 })
-let lastDwellActivity = Date.now()
-let reportedDwell = 0 // 本次页面会话已上报过的秒数（只报增量，避免切走/关掉多次上报重复累加）
-const markDwellActive = () => { lastDwellActivity = Date.now() }
-;['mousemove', 'mousedown', 'keydown', 'wheel', 'scroll', 'touchstart'].forEach(ev =>
-  document.addEventListener(ev, markDwellActive, { passive: true, capture: true }))
+let reportedDwell = 0 // 本次页面已上报过的秒数（增量基线：pagehide 可能多次触发，防重复累加）
 function reportDwell() {
   if (!dwellViewedAt.value || !store.currentOfferId) return
   const delta = dwellSeconds.value - reportedDwell
@@ -45,13 +42,9 @@ function reportDwell() {
     })
   } catch {}
 }
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') reportDwell()
-})
 window.addEventListener('pagehide', reportDwell)
 setInterval(() => {
-  if (document.visibilityState !== 'visible') return // 切到别的标签页不计时
-  if (Date.now() - lastDwellActivity > 3000) return // 鼠标静止超 3 秒不计时
+  if (document.visibilityState !== 'visible') return // 切走（含切到其他产品页）= 暂停，不计时也不写库
   dwellSeconds.value++
 }, 1000)
 const currentTab = computed(() => {

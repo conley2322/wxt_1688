@@ -66,6 +66,22 @@ export default defineContentScript({
   main() {
     const host = location.hostname
     console.log(`[box] content script 启动 — host: ${host}, path: ${location.pathname}`)
+    // 未处理 Promise rejection 探针：fire-and-forget 调用（requestBatch 等）的静默失败全在这里现形
+    try {
+      window.addEventListener('unhandledrejection', e => {
+        try {
+          const r = e && e.reason
+          let el = document.getElementById('alocs-fc-debug')
+          if (!el) {
+            el = document.createElement('div')
+            el.id = 'alocs-fc-debug'
+            el.style.display = 'none'
+            document.documentElement.appendChild(el)
+          }
+          el.textContent = (el.textContent + '\nUNHANDLED ' + (r && (r.stack || r.message) || String(r))).slice(-4000)
+        } catch {}
+      })
+    } catch {}
 
     if (host === DETAIL_HOST) {
       console.log('[box] detail.1688.com 详情页，由 win-content 处理，box 跳过')
@@ -93,6 +109,10 @@ export default defineContentScript({
     const scannedOfferIds = new Set()
     const loadedOfferIds = new Set()
     const batchCache = reactive({})
+    // TDZ 警戒：这两个状态被工厂店分支的 requestBatch 引用，必须声明在工厂店提前 return
+    // 之前——排在 return 之后的声明在该页面永不执行，绑定永久死区（第 4 次踩坑）
+    let lastRequestFingerprint = ''
+    let batchFailToasted = false // 连续失败只弹一次提示（重试期间不刷屏；成功后复位）
 
     // 商品标题/图片就地回填（修复后台「未采集标题」），并挂 FactoryNoteCard 浮窗
     if (host === 'sale.1688.com' && location.pathname.startsWith('/factory/card.html')) {
@@ -142,34 +162,39 @@ export default defineContentScript({
     // 共享的本地数据缓存（offer_id → 卡片信息）—— 已提升到 main() 顶部（工厂店分支提前 return，见顶部注释）
 
     // ── 读取本地批量数据（IndexedDB，无网络）──
-    let lastRequestFingerprint = ''
 
-    async function requestBatch(offerIds, tag, supplierMap = {}) {
+    // opts.force: 强制重读（绕过 batchCache 去重与指纹，用于已有数据刷新）
+    // opts.recordAppear: 传 false 时不记出现流水（刷新类请求防双计）
+    async function requestBatch(offerIds, tag, supplierMap = {}, opts = {}) {
+      const force = !!opts.force
+      fcDebugLog('rb[' + tag + '] enter n=' + offerIds.length + ' force=' + force)
       if (offerIds.length === 0) {
         console.log(`[box:${tag}] 本地批量读取跳过：无 offer_id`)
         return
       }
-      // 会话内去重：已读过的商品不再重复读
-      const newIds = offerIds.filter(id => !(id in batchCache))
+      // 会话内去重：已读过的商品不再重复读（force 刷新除外）
+      const newIds = force ? [...new Set(offerIds)] : offerIds.filter(id => !(id in batchCache))
       if (newIds.length === 0) {
         console.log(`[box:${tag}] 本地批量读取跳过：${offerIds.length} 个商品本次会话都已读取`)
         return
       }
       console.log(`[box:${tag}] 收到 ${offerIds.length} 个 offer_id，其中新商品 ${newIds.length} 个需要读取`)
+      fcDebugLog('rb[' + tag + '] new=' + newIds.length)
 
       const fingerprint = [...newIds].sort().join(',')
-      if (fingerprint === lastRequestFingerprint) {
+      if (!force && fingerprint === lastRequestFingerprint) {
+        fcDebugLog('rb[' + tag + '] skip-fp n=' + newIds.length)
         console.log(`[box:${tag}] 本地批量读取跳过：新商品集合与上次相同`)
         return
       }
       lastRequestFingerprint = fingerprint
       for (const id of newIds) scannedOfferIds.add(id)
       // 只在页面首次读取时提示「正在读取」，后续滚动加载只提示结果，避免刷屏
-      if (loadedOfferIds.size === 0) {
+      if (loadedOfferIds.size === 0 && !force) {
         notify(`正在读取${pageLabel}商品数据…`, { type: 'info', duration: 2000 })
       }
 
-      // 只透传新商品的供应商名
+      // 只透传待读商品的供应商名
       const newSupplierMap = {}
       for (const id of newIds) {
         const name = typeof supplierMap[id] === 'string' ? supplierMap[id].trim() : ''
@@ -180,24 +205,36 @@ export default defineContentScript({
         const res = await dataApi('/api/v1/products/batch_info', 'POST', {
           offer_ids: newIds,
           supplier_map: newSupplierMap,
+          record_appear: opts.recordAppear === false ? false : true,
         })
         if (res.code === 200) {
           Object.assign(batchCache, res.data)
           const count = Object.keys(res.data).length
           for (const id of Object.keys(res.data)) loadedOfferIds.add(id)
+          batchFailToasted = false
+          fcDebugLog('rb[' + tag + '] OK n=' + count + ' view1=' + (res.data[newIds[0]]?.view_count ?? '?'))
           console.log(`[box:${tag}] 本地数据读取成功：命中 ${count} 个商品`)
-          if (count > 0) {
+          // force=静默刷新已有数据不弹提示；首次加载有命中才提示
+          if (count > 0 && !force) {
             notify(`已加载 ${loadedOfferIds.size} 个商品数据（${pageLabel} ${scannedOfferIds.size} 个商品）`)
           }
         } else {
+          fcDebugLog('rb[' + tag + '] code=' + res.code + ' ' + (res.message || ''))
           lastRequestFingerprint = ''
           console.error(`[box:${tag}] 本地数据读取失败：`, res.message)
-          notify(`读取商品数据失败：${res.message || '未知错误'}`, { type: 'error', duration: 4000 })
+          if (!batchFailToasted) {
+            batchFailToasted = true
+            notify(`读取商品数据失败：${res.message || '未知错误'}`, { type: 'error', duration: 4000 })
+          }
         }
       } catch (e) {
         lastRequestFingerprint = ''
+        fcDebugLog('rb[' + tag + '] CATCH ' + (e && e.message || e))
         console.error(`[box:${tag}] 本地数据读取异常:`, e)
-        notify(`读取商品数据失败：${e.message || e}`, { type: 'error', duration: 4000 })
+        if (!batchFailToasted) {
+          batchFailToasted = true
+          notify(`读取商品数据失败：${e.message || e}`, { type: 'error', duration: 4000 })
+        }
       }
     }
 
@@ -540,15 +577,24 @@ export default defineContentScript({
         el.textContent = (el.textContent + '\n' + msg).slice(-4000)
       } catch {}
     }
-    function setupFactoryCardPage() {
+    async function setupFactoryCardPage() {
       // 构建标记：写进共享 DOM 属性，主世界（DevTools/eval）可读，用于确认页面跑的是哪一版
-      try { document.documentElement.setAttribute('data-alocs-fc-build', 'D4-1114') } catch {}
+      try { document.documentElement.setAttribute('data-alocs-fc-build', 'D11-1114') } catch {}
       const qs = new URLSearchParams(location.search)
       const memberId = qs.get('memberId') || ''
       const topOfferIds = (qs.get('topOfferIds') || '').split(',').map(s => s.trim()).filter(Boolean)
       // 注意：本分支在 main() 里早于页面级 pinia 定义就被调用，这里必须自建实例
       // （复用页面级 pinia 会触发暂时性死区 ReferenceError，整条工厂店流程静默崩掉）
       const fcPinia = createPinia()
+      // 默认页签（备注/趋势）：与找工厂页同开关 appSettings.factoryCardDefaultTab。
+      // 必须在读到设置之后再启动扫描/挂载，首扫挂出的卡片才能拿到正确默认页签
+      let fcDefaultTab = 'note'
+      try {
+        const { appSettings = {} } = await browser.storage.local.get('appSettings')
+        fcDefaultTab = appSettings.factoryCardDefaultTab === 'trend' ? 'trend' : 'note'
+      } catch (e) {
+        console.error('[box:factorycard] 读取默认页签设置失败:', e)
+      }
 
       // 工厂名：document.title 形如「厂名-企业信息查询黄页-阿里巴巴」
       function factoryName() {
@@ -607,6 +653,7 @@ export default defineContentScript({
       }
 
       // 批量读取备注数据并挂载 FactoryNoteCard（右下浮窗与相似工厂卡共用）
+      // defaultTab：设置 appSettings.factoryCardDefaultTab（'note'|'trend'），与找工厂页同开关
       function mountNoteApp(el, name, mid, offerId) {
         const note = reactive({})
         async function fetchNote() {
@@ -615,10 +662,25 @@ export default defineContentScript({
             memberIds: mid ? { [name]: mid } : {},
             offerIds: offerId ? { [name]: offerId } : {},
           })
-          if (r.code === 200 && r.data?.[name]) Object.assign(note, r.data[name])
+          if (r.code === 200 && r.data?.[name]) {
+            Object.assign(note, r.data[name])
+            return true
+          }
+          fcDebugLog('batch_info 异常 [' + name.slice(0, 12) + ']: code=' + r.code + ' ' + (r.message || ''))
+          return false
         }
-        fetchNote().catch(e => console.error('[box:factorycard] 备注数据读取失败:', e))
-        const app = createApp(FactoryNoteCard, { factoryName: name, memberId: mid, offerId, note, reload: fetchNote })
+        // 卡片在页面加载瞬间挂载，首批 batch_info 常撞上后台 SW 冷启动（消息通道未就绪，
+        // dataClient 拿到 code=500）——失败后 note 永远空：统计全 0、折线图空白、与找工厂页
+        // 同名供应商也对不上。退避重试兜底；reload（全屏保存后刷新）单次调用，失败静默
+        ;(async () => {
+          for (let i = 0; i < 5; i++) {
+            try { if (await fetchNote()) return } catch (e) {
+              fcDebugLog('batch_info 失败 [' + name.slice(0, 12) + ']: ' + (e && e.message || e))
+            }
+            await new Promise(res => setTimeout(res, 600 * (i + 1)))
+          }
+        })()
+        const app = createApp(FactoryNoteCard, { factoryName: name, memberId: mid, offerId, note, reload: () => fetchNote().catch(() => {}), defaultTab: fcDefaultTab })
         app.use(fcPinia)
         app.mount(el)
       }
@@ -686,6 +748,19 @@ export default defineContentScript({
       //    广告卡 = 链接不是 factory/card.html（第一张，布局略异）。统一重构成找工厂页同款三栏：
       //    左「主图+商品缩略图 2×2」｜中「压缩后的工厂信息」｜右「FactoryNoteCard 备注/趋势」
       //    注入时拦点击冒泡，防止点组件误触卡片跳转 ──
+      // 卡根选择：广告位懒加载的槽位里可能并列两个 <a>（实测 wrap > a占位 + a内容）：
+      //   第一个是加载占位链接（只有 1 张 spinner 图、0 个 div 叶子），真实卡片是随后
+      //   填充的内容链接。直接取第一个子 <a> 会命中占位 → 工厂名判空 → 整卡永久漏挂。
+      //   按「内容量」选根：优先 factory/card.html 链接，其次后代 div 最多的顶层 <a>（closest
+      //   过滤嵌套链接），最后回退 wrap 本身
+      function pickSimRoot(wrap) {
+        if (wrap.tagName === 'A') return wrap
+        const anchors = [...wrap.querySelectorAll('a')].filter(a => a.closest('a') === a)
+        if (!anchors.length) return wrap
+        const cardLink = anchors.find(a => /factory\/card\.html\?memberId=/.test(a.getAttribute('href') || ''))
+        if (cardLink) return cardLink
+        return anchors.slice().sort((x, y) => y.querySelectorAll('div').length - x.querySelectorAll('div').length)[0] || wrap
+      }
       const simMounted = new WeakSet()
       function scanSimilarFactories() {
         // 定位推荐区容器：从标题向上自适应爬（层级随页面版本变化，写死层数会漏）
@@ -702,7 +777,7 @@ export default defineContentScript({
         section.querySelectorAll(':scope > div > div, :scope > div').forEach(wrap => {
           const h = wrap.getBoundingClientRect().height
           if (h < 150 || h > 500) return // 太矮=标题行，太高=整列表容器
-          const root = wrap.tagName === 'A' ? wrap : (wrap.querySelector(':scope > a') || wrap)
+          const root = pickSimRoot(wrap)
           // DOM 自愈式幂等：React 重渲染会抹掉注入节点——
           // mount + 图格都在 = 完好跳过；只剩 mount（图格被抹）= 只补图格；都没有 = 全新挂载
           const hasMount = wrap.querySelector('.alocs-sim-mount, .alocs-sim-mount-abs')
@@ -824,6 +899,7 @@ export default defineContentScript({
       // ── 工厂店商品网格：逐商品挂 box 备注组件（与搜索列表页完全同款，出现次数由 box batch 语义负责）──
       // 定位锚点用「共N个商品」链接（顶部「工厂店」页签与区块同名，用标题定位会命中页签）
       const shopBoxMounted = new WeakSet()
+      let fcShopRefreshAt = 0 // 工厂店商品数据上次静默刷新时间
       function scanFactoryShopProducts() {
         const marker = [...document.querySelectorAll('a')].find(a => /共\d+个商品/.test(a.textContent || ''))
         fcDebugLog('shopScan marker=' + !!marker)
@@ -837,9 +913,11 @@ export default defineContentScript({
         fcDebugLog('shopScan grid=' + !!grid + (grid ? ' links=' + grid.querySelectorAll('a[href*="detail.1688.com/offer/"]').length : ''))
         if (!grid) return
         const ids = []
+        const allIds = new Set()
         grid.querySelectorAll('a[href*="detail.1688.com/offer/"]').forEach(a => {
           const m = (a.getAttribute('href') || '').match(/offer\/(\d{6,})/)
           if (!m) return
+          allIds.add(m[1])
           // 商品卡容器：优先包一层的 div（一 cell 一链接）；工厂店网格 cell 就是 <a> 本身
           const wrapDiv = a.parentElement
           const item = (wrapDiv && wrapDiv.querySelectorAll('a[href*="detail.1688.com/offer/"]').length === 1)
@@ -861,12 +939,27 @@ export default defineContentScript({
             fcDebugLog('工厂店商品挂载失败 [' + m[1] + ']: ' + (e && (e.stack || e.message) || e))
           }
         })
-        // 数据读取（同时按 box 语义记出现流水）；供应商名透传给新商品入库
-        if (ids.length) {
+        // 数据补读：已挂载但 batchCache 还没数据的商品（首扫撞后台 SW 冷启动失败后，
+        // 后续扫描它们不再走"新挂载"分支、ids 永远为空，requestBatch 再也不会被调用
+        // →组件永远显示 0）——每轮扫描把缺数据的补上，直到拿到为止
+        const missing = [...allIds].filter(id => !(id in batchCache))
+        if (missing.length) {
+          fcDebugLog('shop missing=' + missing.length + ' cacheKeys=' + Object.keys(batchCache).length)
           const nm = factoryName()
           const supplierMap = {}
-          ids.forEach(id => { supplierMap[id] = nm })
-          requestBatch(ids, 'factorycard', supplierMap)
+          missing.forEach(id => { supplierMap[id] = nm })
+          requestBatch(missing, 'factorycard', supplierMap)
+        }
+        // 已有数据每 30 秒静默刷新（force+不记出现）：用户浏览详情页回来后计数/折线要更新
+        if (allIds.size && Date.now() - fcShopRefreshAt > 30000) {
+          fcShopRefreshAt = Date.now()
+          const cached = [...allIds].filter(id => id in batchCache)
+          if (cached.length) {
+            const nm = factoryName()
+            const supplierMap = {}
+            cached.forEach(id => { supplierMap[id] = nm })
+            requestBatch(cached, 'factorycard', supplierMap, { force: true, recordAppear: false })
+          }
         }
       }
 
@@ -884,11 +977,17 @@ export default defineContentScript({
       simObserver.observe(document.body, { childList: true, subtree: true })
       // 首扫延后一帧：main() 同步执行期内先让全部闭包变量完成初始化
       setTimeout(scanAllFactoryCards, 0)
-      // React 重渲染可能移除注入节点：前 60 秒每 3 秒兜底重扫（WeakSet 防重复挂载）
-      let simRescans = 20
-      const simRescanTimer = setInterval(() => {
+      // 兜底重扫：前 60 秒每 3 秒追平（React 重渲染抹节点 / 广告位内容填充），之后转 6 秒常驻。
+      // MutationObserver 收不到 img 的 load 事件——「扫描瞬间主图未加载完」被图片就绪门控
+      // 跳过的卡片，若此后页面再无 DOM 变更（滚动停止）就永远漏挂，这是「相似工厂卡有些有
+      // 有些没有」的第二根因；扫描幂等且只遍历单区块，常驻成本可忽略
+      let simFastRescans = 20
+      const simFastTimer = setInterval(() => {
         scanAllFactoryCards()
-        if (--simRescans <= 0) clearInterval(simRescanTimer)
+        if (--simFastRescans <= 0) {
+          clearInterval(simFastTimer)
+          setInterval(scanAllFactoryCards, 6000)
+        }
       }, 3000)
 
       // 轮询等 SSR/异步内容就绪：商品列表连续 2 轮不再增长（或超过 8 轮）才记录到访，

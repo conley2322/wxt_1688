@@ -331,6 +331,14 @@ async function route(path, method, body, query) {
       viewed_at = now
       await db.add('view_records', { offer_id, viewed_at })
     }
+    // 同 viewed_at 碎片自愈：工厂店到访与详情页打开并发写（或 SW 重投递）会落几条
+    // 同一时间戳的记录——合并成一条（时长求和），保证「一个周期只有一条时长」
+    const dups = mine.filter(r => r.viewed_at === viewed_at)
+    if (dups.length > 1) {
+      const sum = Math.min(dups.reduce((s, r) => s + (r.duration || 0), 0), 86400)
+      await db.deleteWhere('view_records', r => r.offer_id === offer_id && r.viewed_at === viewed_at)
+      await db.add('view_records', { offer_id, viewed_at, duration: sum })
+    }
     invalidateAiIndex()
     const records = (await db.all('view_records')).filter(r => r.offer_id === offer_id)
     const p = await getProfile()
@@ -409,9 +417,12 @@ async function route(path, method, body, query) {
     const uniqueIds = [...new Set(body.offer_ids || [])]
     // 页面提取的供应商名（offer_id → 名称），在添加记录时与产品一一对应
     const supplierMap = body.supplier_map || {}
-    // 出现次数 +1（每个商品一条流水）
-    for (const offer_id of uniqueIds) {
-      await db.add('appear_records', { offer_id, appeared_at: Date.now() })
+    // 出现次数 +1（每个商品一条流水）。刷新类请求（record_appear=false，数据静默更新）不记，
+    // 否则同一页面会话反复刷新会把出现次数刷高（双计）
+    if (body.record_appear !== false) {
+      for (const offer_id of uniqueIds) {
+        await db.add('appear_records', { offer_id, appeared_at: Date.now() })
+      }
     }
     const [products, records, comments, appears, snap, multi, storedId] = await Promise.all([
       db.all('products'), db.all('view_records'), db.all('comments'), db.all('appear_records'),
@@ -753,10 +764,15 @@ async function route(path, method, body, query) {
     const profile = await me()
     const myName = stored.nickname || profile.nickname || '我'
 
-    // 自己的浏览：取本地记录（含停留时长）
-    const myViews = records.filter(r => r.offer_id === offer_id)
-    const items = myViews
-      .map(r => ({ token: selfToken, nickname: myName, viewed_at: r.viewed_at, mine: true, duration: r.duration || 0 }))
+    // 自己的浏览：取本地记录（含停留时长）。
+    // 同一 viewed_at = 同一浏览周期（5 分钟合并窗口语义）：聚合为一条、时长求和——
+    // 多入口（工厂店到访+详情页打开）并发写会落几条同 viewed_at 碎片，显示上必须只有一条
+    const byTs = new Map()
+    for (const r of records.filter(r2 => r2.offer_id === offer_id)) {
+      byTs.set(r.viewed_at, (byTs.get(r.viewed_at) || 0) + (r.duration || 0))
+    }
+    const items = [...byTs.entries()]
+      .map(([viewed_at, duration]) => ({ token: selfToken, nickname: myName, viewed_at, mine: true, duration }))
 
     // 他人浏览：远程快照中排除自己（避免与本地重复），受 showOthersViews 控制
     if (multi.showOthersViews && snap) {
@@ -771,7 +787,7 @@ async function route(path, method, body, query) {
 
     items.sort((a, b) => a.viewed_at - b.viewed_at) // 正序：旧在上、新在下
     // 总停留时长（秒）：本商品全部浏览流水时长合计（仅本地自有记录有 duration）
-    const totalDwell = myViews.reduce((s, r) => s + (r.duration || 0), 0)
+    const totalDwell = (records.filter(r => r.offer_id === offer_id)).reduce((s, r) => s + (r.duration || 0), 0)
     return ok(items, { total_dwell: totalDwell, view_total: items.length })
   }
 
@@ -887,9 +903,13 @@ async function route(path, method, body, query) {
     const names = [...new Set((body.names || []).filter(Boolean).map(n => String(n).trim()))]
     const memberIds = body.memberIds || {}
     const offerIds = body.offerIds || {}
-    const [comments, products, records, chats] = await Promise.all([
-      db.all('comments'), db.all('products'), db.all('view_records'), db.all('chat_messages'),
+    const [comments, products, records, chats, suppliers] = await Promise.all([
+      db.all('comments'), db.all('products'), db.all('view_records'), db.all('chat_messages'), db.all('suppliers'),
     ])
+    // memberId → 落库供应商名桥：同一工厂在不同页面拿到的名字可能差一两个字，
+    // 统计以落库名为键聚合；凭 memberId 找回 visit_records/详情页用的正式名一起参与匹配
+    const nameByMemberId = {}
+    for (const s of suppliers) if (s.memberId) nameByMemberId[s.memberId] = s.name
     const viewedOfferIds = new Set(records.map(r => r.offer_id))
     const offerSupplier = {}
     for (const p of products) offerSupplier[p.offer_id] = p.supplier_name || ''
@@ -935,21 +955,33 @@ async function route(path, method, body, query) {
     for (const name of names) {
       const mid = memberIds[name] || ''
       const aliasName = offerSupplier[offerIds[name] || ''] || ''
-      const matchers = [name, aliasName].filter(Boolean)
+      const supName = mid ? (nameByMemberId[mid] || '') : ''
+      const matchers = [name, aliasName, supName].filter(Boolean)
       let myCmts = supplierCommentHits(comments, name, mid)
       if (!myCmts.length && aliasName) myCmts = supplierCommentHits(comments, aliasName, mid)
+      if (!myCmts.length && supName && supName !== name) myCmts = supplierCommentHits(comments, supName, mid)
       const viewedCount = new Set(
         products.filter(p => viewedOfferIds.has(p.offer_id) && matchers.some(m => sameSupplierName(p.supplier_name, m))).map(p => p.offer_id)
       ).size
+      // 趋势聚合：先按精确键取，miss 时按相近名扫描（落库名与查询名可能差一两个字）；
+      // 命中键去重后再求和，防止 name/aliasName/supName 相近命中同一条导致双计
+      const collectKeys = per => {
+        const keys = new Set()
+        for (const m of matchers) {
+          if (per[m]) { keys.add(m); continue }
+          for (const k of Object.keys(per)) if (sameSupplierName(k, m)) keys.add(k)
+        }
+        return keys
+      }
       const days = new Array(30).fill(0)
-      for (const m of matchers) {
-        const d = perNameDays[m]
-        if (d) for (let i = 0; i < 30; i++) days[i] += d[i]
+      for (const k of collectKeys(perNameDays)) {
+        const d = perNameDays[k]
+        for (let i = 0; i < 30; i++) days[i] += d[i]
       }
       const prodDays = new Array(30).fill(0)
-      for (const m of matchers) {
-        const d = perNameProdDays[m]
-        if (d) for (let i = 0; i < 30; i++) prodDays[i] += d[i]
+      for (const k of collectKeys(perNameProdDays)) {
+        const d = perNameProdDays[k]
+        for (let i = 0; i < 30; i++) prodDays[i] += d[i]
       }
       // 浏览总次数：对去重后的供应商 key 求和（name 与 aliasName 可能模糊命中同一个，避免重复计数）
       const viewCount = Object.keys(perNameViewTotal).reduce(
