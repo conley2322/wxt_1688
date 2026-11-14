@@ -188,6 +188,9 @@ const pageSwitches = ref({
   enableCleanUrl: true,
 })
 
+// 找工厂卡片默认页签（note=备注 / trend=趋势，卡片上鼠标悬停切换）
+const factoryCardTab = ref('note')
+
 // ── 存储管理（单机版 IndexedDB）──
 const storage = ref(null) // { usageMB, quotaMB, counts }
 const quotaInput = ref(100)
@@ -471,6 +474,7 @@ onMounted(async () => {
     pageSwitches.value.enableFactorySearch = stored.appSettings.enableFactorySearch ?? true
     pageSwitches.value.enableStopLoading = stored.appSettings.enableStopLoading ?? true
     pageSwitches.value.enableCleanUrl = stored.appSettings.enableCleanUrl ?? true
+    factoryCardTab.value = stored.appSettings.factoryCardDefaultTab === 'trend' ? 'trend' : 'note'
   }
   if (Array.isArray(stored.imQuickPhrases) && stored.imQuickPhrases.length) {
     phrases.value = [...stored.imQuickPhrases]
@@ -500,6 +504,7 @@ async function autoSave() {
     enableFactorySearch: pageSwitches.value.enableFactorySearch,
     enableStopLoading: pageSwitches.value.enableStopLoading,
     enableCleanUrl: pageSwitches.value.enableCleanUrl,
+    factoryCardDefaultTab: factoryCardTab.value,
   }
 
   // 同步内存
@@ -753,6 +758,13 @@ async function autoSave() {
         <el-form-item label="找工厂页">
           <el-switch v-model="pageSwitches.enableFactorySearch" active-text="开启" inactive-text="关闭" @change="autoSave" />
           <div class="switch-desc">s.1688.com/company/pc/factory_search.htm 工厂卡片右侧备注（与商品页「供应商」页签同一份）</div>
+        </el-form-item>
+        <el-form-item label="找工厂卡片默认页签">
+          <el-radio-group v-model="factoryCardTab" @change="autoSave">
+            <el-radio value="note">备注</el-radio>
+            <el-radio value="trend">趋势（折线图）</el-radio>
+          </el-radio-group>
+          <div class="switch-desc">打开找工厂页时卡片先显示哪一页签；页签胶囊在卡片右上角，鼠标放上去即可切换</div>
         </el-form-item>
         <el-form-item label="停止页面加载">
           <el-switch v-model="pageSwitches.enableStopLoading" active-text="开启" inactive-text="关闭" @change="autoSave" />

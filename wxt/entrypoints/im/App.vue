@@ -272,6 +272,16 @@ function fmtTs(ts) {
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+// 停留秒数 → 45秒 / 3分12秒 / 1小时5分
+function fmtDwell(sec) {
+  const s = Math.round(Number(sec) || 0)
+  if (s <= 0) return '0秒'
+  if (s < 60) return `${s}秒`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}分${s % 60 ? s % 60 + '秒' : ''}`
+  return `${Math.floor(m / 60)}小时${m % 60 ? m % 60 + '分' : ''}`
+}
+
 // ── 最近聊天：读实时采集入库的记录（含图片，永久保存）──
 const chatMsgs = ref([])
 const chatLoading = ref(false)
@@ -748,7 +758,7 @@ watch(aiKey, () => {
             <div class="prod-body">
               <div class="prod-title" :title="p.title || ''">{{ p.title || p.offer_id }}</div>
             <div class="prod-meta">
-              <span>浏览 {{ p.view_count }} · 出现 {{ p.appear_count }}</span>
+              <span>浏览 {{ p.view_count }} · 出现 {{ p.appear_count }}<template v-if="p.dwell_seconds"> · 停留 {{ fmtDwell(p.dwell_seconds) }}</template></span>
               <span v-if="p.last_viewed_at">最近 {{ fmtTs(p.last_viewed_at) }}</span>
               <span v-if="p.comment_count" class="prod-note">笔记：{{ stripHtml(p.my_comment) || p.comment_count + ' 条' }}</span>
             </div>
@@ -784,6 +794,7 @@ watch(aiKey, () => {
             <div class="stat-card"><span class="sc-num">{{ supStats?.totals?.product_count ?? '—' }}</span><span class="sc-label">商品</span></div>
             <div class="stat-card"><span class="sc-num">{{ supStats?.totals?.view_count ?? '—' }}</span><span class="sc-label">浏览</span></div>
             <div class="stat-card"><span class="sc-num">{{ supStats?.totals?.appear_count ?? '—' }}</span><span class="sc-label">出现</span></div>
+            <div class="stat-card"><span class="sc-num">{{ supStats ? fmtDwell(supStats.totals?.dwell_seconds) : '—' }}</span><span class="sc-label">停留</span></div>
           </div>
           <div v-if="supStats?.last_view_at" class="info-row"><span class="info-key">最近浏览</span><span class="info-val">{{ fmtTs(supStats.last_view_at) }}</span></div>
           <HsTrendChart v-if="supStats?.daily?.length" :daily="supStats.daily" :height="130" />

@@ -501,6 +501,16 @@ function fmtTs(ts) {
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+// 停留时长（秒）→ 人类可读：45秒 / 3分12秒 / 1小时5分
+function fmtDwell(sec) {
+  const s = Math.round(Number(sec) || 0)
+  if (s <= 0) return '0秒'
+  if (s < 60) return `${s}秒`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}分${s % 60 ? String(s % 60) + '秒' : ''}`
+  return `${Math.floor(m / 60)}小时${m % 60 ? m % 60 + '分' : ''}`
+}
+
 // ── 商品详情（右侧滑出）──
 const drawerVisible = ref(false)
 const currentProduct = ref(null)
@@ -857,6 +867,7 @@ async function deleteSupplier(name) {
               <div class="ss-card"><span class="ss-num">{{ supStats.totals.product_count }}</span><span class="ss-label">商品</span></div>
               <div class="ss-card"><span class="ss-num">{{ supStats.totals.view_count }}</span><span class="ss-label">浏览</span></div>
               <div class="ss-card"><span class="ss-num">{{ supStats.totals.appear_count }}</span><span class="ss-label">出现</span></div>
+              <div class="ss-card"><span class="ss-num">{{ fmtDwell(supStats.totals.dwell_seconds) }}</span><span class="ss-label">停留</span></div>
             </div>
             <div class="ss-times" v-if="supStats.last_view_at">
               首次浏览 {{ fmtTs(supStats.first_view_at) }} · 最近浏览 {{ fmtTs(supStats.last_view_at) }}
@@ -871,6 +882,7 @@ async function deleteSupplier(name) {
             <div v-for="t in (supStats.timeline || []).slice(0, 20)" :key="t.ts + t.offer_id" class="ss-tl-row" @click="openProduct({ offer_id: t.offer_id, title: t.title })">
               <span class="ss-tl-time">{{ fmtTs(t.ts) }}</span>
               <span class="ss-tl-title" :title="t.title">{{ t.title || t.offer_id }}</span>
+              <span class="ss-tl-dwell" v-if="t.duration">{{ fmtDwell(t.duration) }}</span>
             </div>
           </div>
           <div v-else class="pane-empty">该供应商暂无商品浏览数据（仅聊天记录的供应商没有统计数据）</div>
@@ -906,6 +918,7 @@ async function deleteSupplier(name) {
             <div class="row-data">
               <span class="d-appear" title="出现次数">出现 {{ p.appear_count }}</span>
               <span class="d-view" title="浏览次数">浏览 {{ p.view_count }}</span>
+              <span class="d-dwell" title="详情页停留总时长" v-if="p.dwell_seconds">停留 {{ fmtDwell(p.dwell_seconds) }}</span>
             </div>
             <a
               :href="productUrl(p.offer_id)"
@@ -1048,6 +1061,10 @@ async function deleteSupplier(name) {
           <div class="d-data-item">
             <div class="d-data-num">{{ detail.totals.view_count }}</div>
             <div class="d-data-label">浏览次数</div>
+          </div>
+          <div class="d-data-item">
+            <div class="d-data-num">{{ fmtDwell(detail.totals.dwell_seconds) }}</div>
+            <div class="d-data-label">停留总时长</div>
           </div>
           <div class="d-data-item">
             <div class="d-data-num">{{ detail.totals.comment_count }}</div>
@@ -1489,6 +1506,7 @@ async function deleteSupplier(name) {
 }
 .ss-tl-row:hover .ss-tl-title { color: #c9975c; }
 .ss-tl-time { flex-shrink: 0; color: #c4b08c; }
+.ss-tl-dwell { flex-shrink: 0; margin-left: auto; color: #8fbf9f; font-size: 11px; }
 .ss-tl-title {
   flex: 1;
   min-width: 0;
@@ -1557,6 +1575,7 @@ async function deleteSupplier(name) {
 }
 .d-appear { color: #7d96bd; }
 .d-view { color: #c9975c; font-weight: 600; }
+.d-dwell { color: #8fbf9f; }
 .row-jump {
   display: inline-flex;
   align-items: center;

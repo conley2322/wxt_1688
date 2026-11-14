@@ -315,17 +315,80 @@ async function route(path, method, body, query) {
   }
 
   // ── 商品浏览（win 详情页每次进入调用）──
+  // 刷新/快速重开合并：同一商品 5 分钟内的再次进入不新增流水，复用上一条
+  // （viewed_at 保持首次进入时刻），停留时长由 /view_records/duration 累加到这条上
   if (path === '/api/v1/products/Product_browsing_history' && method === 'POST') {
     const { offer_id, title, main_img_url, supplier_name } = body
     await upsertProduct(offer_id, title, main_img_url, supplier_name)
-    await db.add('view_records', { offer_id, viewed_at: Date.now() })
+    const MERGE_WINDOW = 5 * 60 * 1000
+    const all = await db.all('view_records')
+    const mine = all.filter(r => r.offer_id === offer_id).sort((a, b) => b.viewed_at - a.viewed_at)
+    const now = Date.now()
+    let viewed_at
+    if (mine[0] && now - mine[0].viewed_at < MERGE_WINDOW) {
+      viewed_at = mine[0].viewed_at // 复用最近一条，不新增
+    } else {
+      viewed_at = now
+      await db.add('view_records', { offer_id, viewed_at })
+    }
     invalidateAiIndex()
     const records = (await db.all('view_records')).filter(r => r.offer_id === offer_id)
     const p = await getProfile()
     return ok({
       view_count: records.length,
       viewers: [{ username: p.nickname, initial: p.nickname.charAt(0), avatar_color: p.avatar_color, count: records.length }],
+      viewed_at, // 离开页面时按 (offer_id, viewed_at) 精确回填停留时长
     })
+  }
+
+  // ── 详情页停留时长上报（关闭/切走详情页时调用）──
+  // duration 为本次页面会话的「增量」（客户端只报未上报过的部分），累加到流水上；
+  // 5 分钟合并窗口内的刷新会在同一条流水上持续累加
+  if (path === '/api/v1/view_records/duration' && method === 'POST') {
+    const { offer_id, viewed_at, duration } = body || {}
+    if (!offer_id || !viewed_at || !(duration > 0)) return ok(null)
+    const row = (await db.all('view_records')).find(r => r.offer_id === offer_id && r.viewed_at === viewed_at)
+    if (row) {
+      row.duration = Math.min((row.duration || 0) + Math.round(duration), 86400)
+      await db.put('view_records', row)
+      return ok({ duration: row.duration })
+    }
+    return ok(null)
+  }
+
+  // ── 工厂店卡片页到访（sale.1688.com/factory/card.html）：算看过该供应商 ──
+  // 一次调用完成：供应商落库 + 商品补全（标题/图回填）+ 特征商品浏览流水 + 页面商品出现流水
+  if (path === '/api/v1/suppliers/visit_records' && method === 'POST') {
+    const name = String(body.supplier_name || '').trim()
+    if (!name) return ok(null)
+    const exist = await db.get('suppliers', name)
+    if (!exist) {
+      await db.put('suppliers', { name, address: '', memberId: body.memberId || '', created_at: Date.now() })
+    } else if (body.memberId && !exist.memberId) {
+      exist.memberId = body.memberId
+      await db.put('suppliers', exist)
+    }
+    for (const p of (body.products || [])) {
+      if (!p || !p.offer_id) continue
+      await upsertProduct(String(p.offer_id), p.title, p.main_img_url, name)
+    }
+    const now = Date.now()
+    const viewIds = [...new Set((body.view_offer_ids || []).map(String).filter(Boolean))]
+    // 特征商品浏览走 5 分钟合并窗口：反复进出工厂店页不刷流水
+    // 出现流水不再在这里记：工厂店商品网格由 box 组件挂载时的 batch 语义统一记，避免双计
+    const MERGE_WINDOW = 5 * 60 * 1000
+    const lastViewTs = {}
+    for (const r of await db.all('view_records')) {
+      if (!lastViewTs[r.offer_id] || r.viewed_at > lastViewTs[r.offer_id]) lastViewTs[r.offer_id] = r.viewed_at
+    }
+    let viewed = 0
+    for (const oid of viewIds) {
+      if (lastViewTs[oid] && now - lastViewTs[oid] < MERGE_WINDOW) continue
+      await db.add('view_records', { offer_id: oid, viewed_at: now })
+      viewed++
+    }
+    invalidateAiIndex()
+    return ok({ viewed })
   }
   if (path === '/api/v1/products' && method === 'POST') {
     await upsertProduct(body.offer_id, body.title, body.main_img_url, body.supplier_name)
@@ -470,12 +533,14 @@ async function route(path, method, body, query) {
     const [products, records, comments, appears, suppliersTable] = await Promise.all([
       db.all('products'), db.all('view_records'), db.all('comments'), db.all('appear_records'), db.all('suppliers'),
     ])
-    // 浏览计数 / 最近浏览
+    // 浏览计数 / 最近浏览 / 停留总时长（秒）
     const viewCountMap = {}
     const lastView = {}
+    const dwellMap = {}
     for (const r of records) {
       viewCountMap[r.offer_id] = (viewCountMap[r.offer_id] || 0) + 1
       lastView[r.offer_id] = Math.max(lastView[r.offer_id] || 0, r.viewed_at)
+      if (r.duration) dwellMap[r.offer_id] = (dwellMap[r.offer_id] || 0) + r.duration
     }
     // 出现计数
     const appearCountMap = {}
@@ -510,6 +575,7 @@ async function route(path, method, body, query) {
             main_img_url: p.main_img_url,
             view_count: viewCountMap[p.offer_id] || 0,
             appear_count: appearCountMap[p.offer_id] || 0,
+            dwell_seconds: dwellMap[p.offer_id] || 0,
             comment_count: cs.length,
             my_comment: cs[0]?.text || null,
             last_viewed_at: lastView[p.offer_id] || null,
@@ -641,12 +707,14 @@ async function route(path, method, body, query) {
     const supplierViewedCount = supplierName
       ? new Set(products.filter(p => p.supplier_name === supplierName && viewedOfferIds.has(p.offer_id)).map(p => p.offer_id)).size
       : 0
+    const dwellTotal = views.reduce((s, v) => s + (v.duration || 0), 0)
 
     return ok({
       totals: {
         view_count: views.length,
         appear_count: apps.length,
         comment_count: cmts.length,
+        dwell_seconds: dwellTotal,
       },
       // 商品基础信息（IM 客服页询价商品卡展示用，本地库可能没有——未浏览过时为空）
       offer_id,
@@ -685,10 +753,10 @@ async function route(path, method, body, query) {
     const profile = await me()
     const myName = stored.nickname || profile.nickname || '我'
 
-    // 自己的浏览：取本地记录
-    const items = records
-      .filter(r => r.offer_id === offer_id)
-      .map(r => ({ token: selfToken, nickname: myName, viewed_at: r.viewed_at, mine: true }))
+    // 自己的浏览：取本地记录（含停留时长）
+    const myViews = records.filter(r => r.offer_id === offer_id)
+    const items = myViews
+      .map(r => ({ token: selfToken, nickname: myName, viewed_at: r.viewed_at, mine: true, duration: r.duration || 0 }))
 
     // 他人浏览：远程快照中排除自己（避免与本地重复），受 showOthersViews 控制
     if (multi.showOthersViews && snap) {
@@ -702,7 +770,9 @@ async function route(path, method, body, query) {
     }
 
     items.sort((a, b) => a.viewed_at - b.viewed_at) // 正序：旧在上、新在下
-    return ok(items)
+    // 总停留时长（秒）：本商品全部浏览流水时长合计（仅本地自有记录有 duration）
+    const totalDwell = myViews.reduce((s, r) => s + (r.duration || 0), 0)
+    return ok(items, { total_dwell: totalDwell, view_total: items.length })
   }
 
   // ── 商品的他人笔记 ──  // GET /api/v1/products/:id/others
@@ -831,16 +901,35 @@ async function route(path, method, body, query) {
       const d = new Date(startTs + i * DAY)
       dateLabels.push(`${pad(d.getMonth() + 1)}-${pad(d.getDate())}`)
     }
-    // 近 30 天浏览流水按（供应商名, 日）预聚合
+    // 近 30 天浏览流水按（供应商名, 日）预聚合 + 全期浏览总次数（商品“次数”）
     const perNameDays = {}
+    const perNameViewTotal = {}
     for (const r of records) {
-      if (!r.viewed_at || r.viewed_at < startTs) continue
       const nm = offerSupplier[r.offer_id]
       if (!nm) continue
+      perNameViewTotal[nm] = (perNameViewTotal[nm] || 0) + 1
+      if (!r.viewed_at || r.viewed_at < startTs) continue
       const idx = Math.floor((r.viewed_at - startTs) / DAY)
       if (idx < 0 || idx > 29) continue
       if (!perNameDays[nm]) perNameDays[nm] = new Array(30).fill(0)
       perNameDays[nm][idx]++
+    }
+    // 商品数量线：按商品「首次浏览日」聚合（每天新看几款），去重口径与 viewed_product_count 一致
+    const offerFirstView = {}
+    for (const r of records) {
+      if (!r.viewed_at) continue
+      if (offerFirstView[r.offer_id] === undefined || r.viewed_at < offerFirstView[r.offer_id]) {
+        offerFirstView[r.offer_id] = r.viewed_at
+      }
+    }
+    const perNameProdDays = {}
+    for (const [oid, ts] of Object.entries(offerFirstView)) {
+      const nm = offerSupplier[oid]
+      if (!nm || ts < startTs) continue
+      const idx = Math.floor((ts - startTs) / DAY)
+      if (idx < 0 || idx > 29) continue
+      if (!perNameProdDays[nm]) perNameProdDays[nm] = new Array(30).fill(0)
+      perNameProdDays[nm][idx]++
     }
     const result = {}
     for (const name of names) {
@@ -857,13 +946,34 @@ async function route(path, method, body, query) {
         const d = perNameDays[m]
         if (d) for (let i = 0; i < 30; i++) days[i] += d[i]
       }
-      const chatCount = chats.filter(c => matchers.some(m => sameSupplierName(c.supplier_name, m) || sameSupplierName(c.display_name, m))).length
+      const prodDays = new Array(30).fill(0)
+      for (const m of matchers) {
+        const d = perNameProdDays[m]
+        if (d) for (let i = 0; i < 30; i++) prodDays[i] += d[i]
+      }
+      // 浏览总次数：对去重后的供应商 key 求和（name 与 aliasName 可能模糊命中同一个，避免重复计数）
+      const viewCount = Object.keys(perNameViewTotal).reduce(
+        (s, nm) => matchers.some(m => sameSupplierName(nm, m)) ? s + perNameViewTotal[nm] : s, 0)
+      const chatHits = chats.filter(c => matchers.some(m => sameSupplierName(c.supplier_name, m) || sameSupplierName(c.display_name, m)))
+      // 聊天“次数”＝有消息的天数去重（10/20/23 号各聊过 → 3 次）；趋势取近 30 天逐日条数
+      const chatDaySet = new Set()
+      const chatDays = new Array(30).fill(0)
+      for (const c of chatHits) {
+        if (!c.ts) continue
+        chatDaySet.add(new Date(c.ts).setHours(0, 0, 0, 0))
+        const idx = Math.floor((c.ts - startTs) / DAY)
+        if (idx >= 0 && idx <= 29) chatDays[idx]++
+      }
       result[name] = {
         my_comments: myCmts,
         comment_count: myCmts.length,
         viewed_product_count: viewedCount,
+        view_count: viewCount,
         views_timeline: dateLabels.map((date, i) => ({ date, count: days[i] })),
-        chat_count: chatCount,
+        chat_count: chatHits.length,
+        chat_days: chatDaySet.size,
+        chat_timeline: dateLabels.map((date, i) => ({ date, count: chatDays[i] })),
+        product_timeline: dateLabels.map((date, i) => ({ date, count: prodDays[i] })),
       }
     }
     return ok(result)
@@ -1201,13 +1311,15 @@ async function route(path, method, body, query) {
         appear: apps.filter(v => v.appeared_at >= dayStart && v.appeared_at < dayStart + DAY).length,
       })
     }
-    // 浏览时间轴：该供应商所有商品的浏览事件（新→旧，最近 50 条）
+    // 浏览时间轴：该供应商所有商品的浏览事件（新→旧，最近 50 条，含停留时长）
     const timeline = views
       .slice()
       .sort((a, b) => b.viewed_at - a.viewed_at)
       .slice(0, 50)
-      .map(v => ({ ts: v.viewed_at, offer_id: v.offer_id, title: titleOf[v.offer_id] || v.offer_id }))
+      .map(v => ({ ts: v.viewed_at, offer_id: v.offer_id, title: titleOf[v.offer_id] || v.offer_id, duration: v.duration || 0 }))
     const viewTimes = views.map(v => v.viewed_at)
+    // 停留总时长（秒）：该供应商全部商品浏览流水时长合计
+    const dwellTotal = views.reduce((s, v) => s + (v.duration || 0), 0)
     // 24 小时浏览时段分布
     const hourly = new Array(24).fill(0)
     for (const v of views) hourly[new Date(v.viewed_at).getHours()]++
@@ -1223,6 +1335,7 @@ async function route(path, method, body, query) {
         product_count: offerIds.size,
         view_count: views.length,
         appear_count: apps.length,
+        dwell_seconds: dwellTotal,
       },
       first_view_at: viewTimes.length ? minOf(viewTimes) : null,
       last_view_at: viewTimes.length ? maxOf(viewTimes) : null,

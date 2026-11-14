@@ -85,6 +85,9 @@ export const useDomStore = defineStore('dom', () => {
 
       const titles = document.querySelector('#productTitle > div > div.title-content > h1')?.innerText
         || document.querySelector('#root-container .title-text')?.innerText
+        // 页面改版兜底：og:title 常驻 <head>；document.title 形如「商品名-阿里巴巴」
+        || document.querySelector('meta[property="og:title"]')?.content
+        || (document.title || '').split('-')[0].trim()
         || ''
 
       // 安全获取图片URL
@@ -108,6 +111,10 @@ export const useDomStore = defineStore('dom', () => {
         }
       } catch (err) {
         console.warn('获取图片URL时出错:', err)
+      }
+      // 主图兜底：og:image（改版页面选择器抓不到时）
+      if (!imageUrl) {
+        try { imageUrl = document.querySelector('meta[property="og:image"]')?.content || '' } catch {}
       }
 
       return {

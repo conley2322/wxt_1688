@@ -81,22 +81,34 @@ export default defineContentScript({
       setupIm()
       return
     }
+    // 工厂店卡片页（sale.1688.com/factory/card.html）：整页单工厂档案。
+    // 进入该页 = 看过该供应商（特征商品浏览流水 + 页面商品出现流水），
+    let scanCount = 0
+    // 已挂载但尚未随供应商名一起请求的商品（等店铺头部公司名就绪）
+    const pendingShopOffers = new Set()
+    // pinia/batchCache 等必须在所有分支派发之前初始化：工厂店分支提前 return，
+    // 排在 return 之后的 const 永远不会初始化（TDZ），mountCard/requestBatch 一引用就炸（历史踩坑×2）
+    const pinia = createPinia()
+    let pageLabel = '本页'
+    const scannedOfferIds = new Set()
+    const loadedOfferIds = new Set()
+    const batchCache = reactive({})
+
+    // 商品标题/图片就地回填（修复后台「未采集标题」），并挂 FactoryNoteCard 浮窗
+    if (host === 'sale.1688.com' && location.pathname.startsWith('/factory/card.html')) {
+      console.log('[box] 工厂店卡片页，启动采集 + 备注浮窗')
+      setupFactoryCardPage()
+      return
+    }
     const isListHost = LIST_HOSTS.includes(host)
     // 找工厂页（s.1688.com/company/pc/factory_search.htm）：卡片结构完全不同于商品列表，
     // 必须提前分流，否则列表页流程会空转并弹「页面改版」误报
     const isFactorySearch = isListHost && /\/company\/pc\/factory_search\.htm/.test(location.pathname)
     console.log(`[box] 分流结果: ${isListHost ? '列表页流程' : '供应商店铺页流程'}${isFactorySearch ? ' → 找工厂页' : ''}`)
-
-    let scanCount = 0
-    // 已挂载但尚未随供应商名一起请求的商品（等店铺头部公司名就绪）
-    const pendingShopOffers = new Set()
-    const pinia = createPinia()
+    pageLabel = isListHost ? '本页' : '本店'
 
     // ── 页面加载提示（Element Plus Notification）──
     // 每条消息独立弹出、几秒后自动消失；同时出现多条时由 Element Plus 自动向下排队。
-    const pageLabel = isListHost ? '本页' : '本店'
-    const scannedOfferIds = new Set()
-    const loadedOfferIds = new Set()
 
     function ensureNotifyStyle() {
       if (document.getElementById('alocs-el-notify-style')) return
@@ -127,8 +139,7 @@ export default defineContentScript({
       })
     }
 
-    // 共享的本地数据缓存（offer_id → 卡片信息）
-    const batchCache = reactive({})
+    // 共享的本地数据缓存（offer_id → 卡片信息）—— 已提升到 main() 顶部（工厂店分支提前 return，见顶部注释）
 
     // ── 读取本地批量数据（IndexedDB，无网络）──
     let lastRequestFingerprint = ''
@@ -510,6 +521,404 @@ export default defineContentScript({
     }
 
     // ════════════════════════════════════════════════
+    // B2. 工厂店卡片页（sale.1688.com/factory/card.html）
+    // ════════════════════════════════════════════════
+    // 整页单工厂档案：进入 = 看过该供应商。做三件事：
+    //   ① 采集页面上全部商品（标题/图/offer）→ /suppliers/visit_records 补全 products（修「未采集标题」）
+    //   ② URL topOfferIds 记浏览流水、页面商品记出现流水（供应商由此进入「已看」统计）
+    //   ③ 右下角挂 FactoryNoteCard 浮窗（备注/趋势同款组件，数据与找工厂卡同一接口）
+    // 调试探针：隔离世界的报错/里程碑写进隐藏 DOM 节点，主世界（DevTools/eval）可读
+    function fcDebugLog(msg) {
+      try {
+        let el = document.getElementById('alocs-fc-debug')
+        if (!el) {
+          el = document.createElement('div')
+          el.id = 'alocs-fc-debug'
+          el.style.display = 'none'
+          document.documentElement.appendChild(el)
+        }
+        el.textContent = (el.textContent + '\n' + msg).slice(-4000)
+      } catch {}
+    }
+    function setupFactoryCardPage() {
+      // 构建标记：写进共享 DOM 属性，主世界（DevTools/eval）可读，用于确认页面跑的是哪一版
+      try { document.documentElement.setAttribute('data-alocs-fc-build', 'D4-1114') } catch {}
+      const qs = new URLSearchParams(location.search)
+      const memberId = qs.get('memberId') || ''
+      const topOfferIds = (qs.get('topOfferIds') || '').split(',').map(s => s.trim()).filter(Boolean)
+      // 注意：本分支在 main() 里早于页面级 pinia 定义就被调用，这里必须自建实例
+      // （复用页面级 pinia 会触发暂时性死区 ReferenceError，整条工厂店流程静默崩掉）
+      const fcPinia = createPinia()
+
+      // 工厂名：document.title 形如「厂名-企业信息查询黄页-阿里巴巴」
+      function factoryName() {
+        const t = (document.title || '').split('-')[0].trim()
+        return t && !/企业信息查询|阿里巴巴/.test(t) ? t : ''
+      }
+
+      // 页面商品：全部 detail.1688.com/offer/:id 链接。
+      // 标题取链接文本里第一条「非价格/营销噪音」的行（价格行、已售/想定/起订等行都排除）
+      const FC_NOISE = /(已售|人想定|起订|立即定制|包赔|必赔|趋势热品|工厂店|查看更多)/
+      function collectProducts() {
+        const out = new Map()
+        document.querySelectorAll('a[href*="detail.1688.com/offer/"]').forEach(a => {
+          const m = (a.getAttribute('href') || '').match(/offer\/(\d{6,})/)
+          if (!m || out.has(m[1])) return
+          const oid = m[1]
+          const lines = (a.textContent || '').split('\n').map(s => s.trim()).filter(Boolean)
+          let title = ''
+          for (const line of lines) {
+            if (line.length < 2 || FC_NOISE.test(line)) continue
+            if (/^[¥￥\d]/.test(line)) continue
+            title = line; break
+          }
+          if (!title) { // 兜底：取最长一行
+            for (const line of lines) if (line.length > title.length && !/^[¥￥]/.test(line)) title = line
+          }
+          if (!title) return
+          let img = ''
+          const bgm = (a.style.backgroundImage || '').match(/url\((['"]?)(.*?)\1\)/)
+          if (bgm && bgm[2]) img = bgm[2]
+          else {
+            const im = a.querySelector('img')
+            img = im ? (im.src || im.getAttribute('data-src') || '') : ''
+          }
+          out.set(oid, { offer_id: oid, title, main_img_url: img })
+        })
+        return out
+      }
+
+      async function recordVisit(name, prods) {
+        const allIds = [...prods.keys()]
+        // 特征商品（URL topOfferIds）记「浏览」；没有时取页面前 3 个，保证供应商进入「已看」
+        const viewIds = topOfferIds.length ? topOfferIds : allIds.slice(0, 3)
+        try {
+          const res = await dataApi('/api/v1/suppliers/visit_records', 'POST', {
+            supplier_name: name,
+            memberId,
+            products: [...prods.values()],
+            view_offer_ids: viewIds,
+          })
+          if (res.code === 200) console.log(`[box:factorycard] 到访已记录：${name}（商品 ${allIds.length}，浏览 ${res.data?.viewed ?? 0}）`)
+          else console.error('[box:factorycard] 到访记录失败:', res.message)
+        } catch (e) {
+          console.error('[box:factorycard] 到访记录异常:', e)
+        }
+      }
+
+      // 批量读取备注数据并挂载 FactoryNoteCard（右下浮窗与相似工厂卡共用）
+      function mountNoteApp(el, name, mid, offerId) {
+        const note = reactive({})
+        async function fetchNote() {
+          const r = await dataApi('/api/v1/suppliers/batch_info', 'POST', {
+            names: [name],
+            memberIds: mid ? { [name]: mid } : {},
+            offerIds: offerId ? { [name]: offerId } : {},
+          })
+          if (r.code === 200 && r.data?.[name]) Object.assign(note, r.data[name])
+        }
+        fetchNote().catch(e => console.error('[box:factorycard] 备注数据读取失败:', e))
+        const app = createApp(FactoryNoteCard, { factoryName: name, memberId: mid, offerId, note, reload: fetchNote })
+        app.use(fcPinia)
+        app.mount(el)
+      }
+
+      // 右下角备注浮窗：数据与找工厂卡同一 /suppliers/batch_info
+      let panelShown = false
+      async function mountNotePanel(name) {
+        if (panelShown) return
+        panelShown = true
+        if (!document.getElementById('alocs-fc-style')) {
+          const style = document.createElement('style')
+          style.id = 'alocs-fc-style'
+          style.textContent = `
+            .alocs-fc-panel { position: fixed; right: 12px; bottom: 16px; width: 440px; height: 320px;
+              z-index: 2147483000; background: #fff; border: 1px solid #f0e6d6; border-radius: 8px;
+              box-shadow: 0 8px 28px rgba(0,0,0,0.16); display: flex; flex-direction: column;
+              padding: 8px 10px 0 12px; box-sizing: border-box; }
+            .alocs-fc-bar { display: flex; align-items: center; gap: 6px; flex-shrink: 0; padding-bottom: 4px; }
+            .alocs-fc-bar .t { font-size: 11px; font-weight: 600; color: #c9975c; }
+            .alocs-fc-bar .sp { flex: 1; }
+            .alocs-fc-bar button { border: none; background: transparent; color: #999; font-size: 12px;
+              cursor: pointer; width: 22px; height: 22px; border-radius: 4px; display: flex;
+              align-items: center; justify-content: center; padding: 0; }
+            .alocs-fc-bar button:hover { background: #f5f5f5; color: #333; }
+            /* 相似工厂卡重构：左图格（主图+缩略图 2×2，同找工厂页） */
+            .alocs-sim-imgs { width:170px; flex-shrink:0; display:flex; flex-wrap:wrap; gap:6px; align-content:flex-start; }
+            .alocs-sim-th { width:82px; height:82px; border-radius:4px; background-color:#f0f0f0;
+              background-size:cover; background-position:center; }
+            /* 相似工厂卡内的备注组件：flex 第三列（缩到 300px 给中列让位） */
+            .alocs-sim-mount { flex: 0 0 300px; height: 170px; margin-left: 12px; padding: 6px 8px 0 12px;
+              border-left: 1px solid #f0e6d6; box-sizing: border-box; display: flex; background: #fff; }
+            /* 广告卡等非 flex 结构：卡内绝对定位面板 */
+            .alocs-sim-mount-abs { position: absolute; right: 10px; top: 20px; bottom: 20px; width: 300px; margin-left: 0; }
+          `
+          document.head.appendChild(style)
+        }
+        const panel = document.createElement('div')
+        panel.className = 'alocs-fc-panel'
+        const bar = document.createElement('div')
+        bar.className = 'alocs-fc-bar'
+        bar.innerHTML = '<span class="t">ALOCS 备注</span><span class="sp"></span>'
+        const minBtn = document.createElement('button')
+        minBtn.textContent = '—'
+        minBtn.title = '收起 / 展开'
+        bar.appendChild(minBtn)
+        const body = document.createElement('div')
+        body.style.cssText = 'flex:1 1 auto; min-height:0; display:flex;'
+        panel.appendChild(bar)
+        panel.appendChild(body)
+        document.body.appendChild(panel)
+        minBtn.addEventListener('click', () => {
+          const min = panel.classList.toggle('alocs-fc-min')
+          body.style.display = min ? 'none' : 'flex'
+          minBtn.textContent = min ? '+' : '—'
+        })
+
+        const mount = document.createElement('div')
+        mount.style.cssText = 'flex:1 1 auto; min-width:0; display:flex;'
+        body.appendChild(mount)
+        mountNoteApp(mount, name, memberId, topOfferIds[0] || '')
+      }
+
+      // ── 相似工厂推荐卡（「为你推荐相似工厂」区块）：
+      //    普通卡 = <a href="factory/card.html?memberId=..&topOfferIds=..">（flex 行：主图 170 + 信息 580），
+      //    广告卡 = 链接不是 factory/card.html（第一张，布局略异）。统一重构成找工厂页同款三栏：
+      //    左「主图+商品缩略图 2×2」｜中「压缩后的工厂信息」｜右「FactoryNoteCard 备注/趋势」
+      //    注入时拦点击冒泡，防止点组件误触卡片跳转 ──
+      const simMounted = new WeakSet()
+      function scanSimilarFactories() {
+        // 定位推荐区容器：从标题向上自适应爬（层级随页面版本变化，写死层数会漏）
+        const heading = [...document.querySelectorAll('*')].find(el =>
+          el.children.length === 0 && (el.textContent || '').trim() === '为你推荐相似工厂')
+        if (!heading) return
+        let section = heading
+        for (let i = 0; i < 8 && section; i++) {
+          section = section.parentElement
+          if (!section) break
+          if (section.querySelectorAll('a[href*="factory/card.html?memberId="], a[href*="detail.1688.com/offer/"]').length >= 3) break
+        }
+        if (!section) return
+        section.querySelectorAll(':scope > div > div, :scope > div').forEach(wrap => {
+          const h = wrap.getBoundingClientRect().height
+          if (h < 150 || h > 500) return // 太矮=标题行，太高=整列表容器
+          const root = wrap.tagName === 'A' ? wrap : (wrap.querySelector(':scope > a') || wrap)
+          // DOM 自愈式幂等：React 重渲染会抹掉注入节点——
+          // mount + 图格都在 = 完好跳过；只剩 mount（图格被抹）= 只补图格；都没有 = 全新挂载
+          const hasMount = wrap.querySelector('.alocs-sim-mount, .alocs-sim-mount-abs')
+          const hasGrid = wrap.querySelector('.alocs-sim-imgs')
+          if (hasMount && hasGrid) { simMounted.add(wrap); return }
+          // 工厂名：优先加粗名字节点，兜底取以公司/厂等结尾的长文本叶子
+          const nameEl = root.querySelector('div[style*="font-weight: bold"], div[style*="font-weight:bold"]')
+            || [...root.querySelectorAll('div')].find(el => el.children.length === 0
+              && (el.textContent || '').trim().length >= 6
+              && /(有限公司|有限责任公司|厂|经营部|商行|公司)$/.test((el.textContent || '').trim()))
+          const name = nameEl ? nameEl.textContent.trim() : ''
+          if (!name) return
+          try {
+            // 重构（返回 false = 主图懒加载未完成，本轮跳过，等重扫）
+            const ready = restructureSimCard(root)
+            if (ready === false) return
+            simMounted.add(wrap)
+            if (hasMount) return // mount 还在，本轮只补了图格
+            // memberId / topOfferIds：卡片主链接；广告卡没有 → 代表商品兜底用卡内商品链接
+            const cardLink = root.matches('a[href*="factory/card.html?memberId="]')
+              ? root : root.querySelector('a[href*="factory/card.html?memberId="]')
+            const mid = cardLink ? decodeURIComponent((cardLink.getAttribute('href').match(/memberId=([^&]+)/) || [])[1] || '') : ''
+            const topIds = cardLink ? (((cardLink.getAttribute('href').match(/topOfferIds=([^&]+)/) || [])[1] || '').split(',').map(s => s.trim()).filter(Boolean)) : []
+            const repOffer = topIds[0]
+              || ((root.querySelector('a[href*="detail.1688.com/offer/"]')?.getAttribute('href') || '').match(/offer\/(\d{6,})/) || [])[1]
+              || ''
+            const mount = document.createElement('div')
+            ;['click', 'mousedown', 'mouseup'].forEach(ev =>
+              mount.addEventListener(ev, e => e.stopPropagation()))
+            const flexHost = root.tagName === 'A' ? root : (root.querySelector('a') || root)
+            if (flexHost !== root && getComputedStyle(flexHost).display.includes('flex')) {
+              mount.className = 'alocs-sim-mount'
+              flexHost.appendChild(mount)
+            } else if (flexHost !== root) {
+              // 广告卡等非 flex 结构：卡内绝对定位面板（信息列收窄让位）
+              mount.className = 'alocs-sim-mount alocs-sim-mount-abs'
+              root.appendChild(mount)
+            } else {
+              mount.className = 'alocs-sim-mount'
+              root.appendChild(mount)
+            }
+            mountNoteApp(mount, name, mid, repOffer)
+          } catch (e) {
+            console.error('[box:factorycard] 单卡注入失败:', name, e)
+            fcDebugLog('单卡注入失败 [' + name + ']: ' + (e && (e.stack || e.message) || e))
+          }
+        })
+      }
+
+      // 卡片重构：左图格（主图+缩略图 2×2，同找工厂页）+ 中列信息压缩（字体/宽度让位）
+      // 图片 URL 有效性：必须是 http(s) 真图；懒加载占位（1px gif/加载动图）一律不要
+      const isValidImgUrl = s => s && /^https?:/.test(s) && !s.includes('TB1KM4iT') && !/\/gif;base64/.test(s)
+      function restructureSimCard(root) {
+        if (root.querySelector('.alocs-sim-imgs')) return true
+        const imgBox = root.firstElementChild
+        const info = imgBox ? imgBox.nextElementSibling : null
+        // 主图懒加载未完成 → 本轮不重构（避免复制出灰占位），等下一轮重扫
+        const mainImg = imgBox?.querySelector('img')
+        if (mainImg && mainImg.naturalWidth === 0 && mainImg.getAttribute('src')) return false
+        // 主图 url：img.src（过滤占位）或背景图
+        const bgm = imgBox ? (imgBox.getAttribute('style') || '').match(/url\((['"]?)(.*?)\1\)/) : null
+        const mainUrl = [mainImg?.src, bgm?.[2]].find(isValidImgUrl) || ''
+        // 商品缩略图：卡内「绝对定位 + 含 ≥2 张真图」的行（普通卡/广告卡都在这个位置），
+        // 找不到再兜底抓卡内 40~160px 宽的真图
+        const absRows = [...root.querySelectorAll('div[style*="position: absolute"]')]
+          .filter(g => [...g.querySelectorAll('img')].filter(i => isValidImgUrl(i.src)).length >= 2)
+        const thumbRow = absRows[0] || null
+        let thumbUrls = thumbRow
+          ? [...thumbRow.querySelectorAll('img')].map(i => i.src).filter(isValidImgUrl).slice(0, 3)
+          : []
+        if (!thumbUrls.length) {
+          thumbUrls = [...root.querySelectorAll('img')]
+            .filter(i => {
+              if (!isValidImgUrl(i.src)) return false
+              const r = i.getBoundingClientRect()
+              return r.width >= 40 && r.width <= 160 && r.height >= 40
+            })
+            .map(i => i.src).slice(0, 3)
+        }
+        // 左列 2×2 图格：只有拿到至少一张真图才替换，否则保留原图区（避免出现灰框）
+        if ((mainUrl || thumbUrls.length) && imgBox) {
+          const grid = document.createElement('div')
+          grid.className = 'alocs-sim-imgs'
+          if (mainUrl) {
+            const d = document.createElement('div')
+            d.className = 'alocs-sim-th'
+            d.style.backgroundImage = `url("${mainUrl}")`
+            grid.appendChild(d)
+          }
+          thumbUrls.forEach(u => {
+            const d = document.createElement('div')
+            d.className = 'alocs-sim-th'
+            d.style.backgroundImage = `url("${u}")`
+            grid.appendChild(d)
+          })
+          root.insertBefore(grid, imgBox)
+          imgBox.style.display = 'none'
+        }
+        if (thumbRow) thumbRow.style.display = 'none'
+        // 中列压缩：宽度改弹性、名字 14px、正文 11px（原 580px 固定宽 + 20px 字太占地）
+        if (info) {
+          info.style.width = 'auto'
+          info.style.flex = '1 1 auto'
+          info.style.minWidth = '0'
+          info.style.marginLeft = '10px'
+          info.querySelectorAll('div').forEach(d => {
+            const st = d.getAttribute('style') || ''
+            if (st.includes('font-weight: bold') || st.includes('font-weight:bold')) {
+              d.style.fontSize = '14px'
+              d.style.lineHeight = '1.3'
+              d.style.whiteSpace = 'normal'
+            } else if (!d.children.length) {
+              d.style.fontSize = '11px'
+            }
+          })
+        }
+        return true
+      }
+      // ── 工厂店商品网格：逐商品挂 box 备注组件（与搜索列表页完全同款，出现次数由 box batch 语义负责）──
+      // 定位锚点用「共N个商品」链接（顶部「工厂店」页签与区块同名，用标题定位会命中页签）
+      const shopBoxMounted = new WeakSet()
+      function scanFactoryShopProducts() {
+        const marker = [...document.querySelectorAll('a')].find(a => /共\d+个商品/.test(a.textContent || ''))
+        fcDebugLog('shopScan marker=' + !!marker)
+        if (!marker) return
+        let grid = marker
+        for (let i = 0; i < 8 && grid; i++) {
+          grid = grid.parentElement
+          if (!grid) break
+          if (grid.querySelectorAll('a[href*="detail.1688.com/offer/"]').length >= 3) break
+        }
+        fcDebugLog('shopScan grid=' + !!grid + (grid ? ' links=' + grid.querySelectorAll('a[href*="detail.1688.com/offer/"]').length : ''))
+        if (!grid) return
+        const ids = []
+        grid.querySelectorAll('a[href*="detail.1688.com/offer/"]').forEach(a => {
+          const m = (a.getAttribute('href') || '').match(/offer\/(\d{6,})/)
+          if (!m) return
+          // 商品卡容器：优先包一层的 div（一 cell 一链接）；工厂店网格 cell 就是 <a> 本身
+          const wrapDiv = a.parentElement
+          const item = (wrapDiv && wrapDiv.querySelectorAll('a[href*="detail.1688.com/offer/"]').length === 1)
+            ? wrapDiv : a
+          // DOM 自愈式幂等：React 重渲染抹掉 box 后要能重挂（不能只信 WeakSet）
+          if (item.querySelector('.box-main-card')) { shopBoxMounted.add(item); return }
+          try {
+            shopBoxMounted.add(item)
+            ids.push(m[1])
+            mountCard(item, m[1], {})
+            // 商品格可能是 <a> 或含跳转链接：拦 box 面板内的点击冒泡，防止点备注触发跳转
+            requestAnimationFrame(() => {
+              const bc = item.querySelector('.box-card')
+              if (bc) ['click', 'mousedown', 'mouseup'].forEach(ev =>
+                bc.addEventListener(ev, e => e.stopPropagation()))
+            })
+          } catch (e) {
+            console.error('[box:factorycard] 工厂店商品挂载失败:', m[1], e)
+            fcDebugLog('工厂店商品挂载失败 [' + m[1] + ']: ' + (e && (e.stack || e.message) || e))
+          }
+        })
+        // 数据读取（同时按 box 语义记出现流水）；供应商名透传给新商品入库
+        if (ids.length) {
+          const nm = factoryName()
+          const supplierMap = {}
+          ids.forEach(id => { supplierMap[id] = nm })
+          requestBatch(ids, 'factorycard', supplierMap)
+        }
+      }
+
+      // 卡片随滚动懒加载：MutationObserver 防抖扫描（WeakSet 防重复挂载）
+      // 单块扫描异常只记日志不外抛，避免一次坏扫描杀死观察循环
+      function scanAllFactoryCards() {
+        try { scanSimilarFactories() } catch (e) { console.error('[box:factorycard] 相似工厂扫描异常:', e); fcDebugLog('相似工厂扫描异常: ' + (e && (e.stack || e.message) || e)) }
+        try { scanFactoryShopProducts() } catch (e) { console.error('[box:factorycard] 工厂店扫描异常:', e); fcDebugLog('工厂店扫描异常: ' + (e && (e.stack || e.message) || e)) }
+      }
+      let simScanTimer = null
+      const simObserver = new MutationObserver(() => {
+        clearTimeout(simScanTimer)
+        simScanTimer = setTimeout(scanAllFactoryCards, 300)
+      })
+      simObserver.observe(document.body, { childList: true, subtree: true })
+      // 首扫延后一帧：main() 同步执行期内先让全部闭包变量完成初始化
+      setTimeout(scanAllFactoryCards, 0)
+      // React 重渲染可能移除注入节点：前 60 秒每 3 秒兜底重扫（WeakSet 防重复挂载）
+      let simRescans = 20
+      const simRescanTimer = setInterval(() => {
+        scanAllFactoryCards()
+        if (--simRescans <= 0) clearInterval(simRescanTimer)
+      }, 3000)
+
+      // 轮询等 SSR/异步内容就绪：商品列表连续 2 轮不再增长（或超过 8 轮）才记录到访，
+      // 避免商品懒加载未完成就落库导致漏采（漏采 = 后台「未采集标题」的来源之一）
+      let recorded = false
+      let tries = 0
+      let lastSize = -1
+      let stableCount = 0
+      const timer = setInterval(async () => {
+        tries++
+        const name = factoryName()
+        if (!name) {
+          if (tries > 20) clearInterval(timer)
+          return
+        }
+        mountNotePanel(name)
+        if (!recorded) {
+          const prods = collectProducts()
+          if (prods.size === lastSize) stableCount++
+          else { stableCount = 0; lastSize = prods.size }
+          if (prods.size > 0 && (stableCount >= 2 || tries > 8)) {
+            recorded = true
+            recordVisit(name, prods)
+          }
+        }
+        if ((recorded && panelShown) || tries > 20) clearInterval(timer)
+      }, 1000)
+    }
+
+    // ════════════════════════════════════════════════
     // C. 找工厂页（s.1688.com/company/pc/factory_search.htm）
     // ════════════════════════════════════════════════
     // 供应商卡片：.space-factory-card（卡片本身 flex 横排），工厂名在 .title-container .title
@@ -535,6 +944,8 @@ export default defineContentScript({
     }
     let factoryRenderedCount = 0
     let factoryStyleInjected = false
+    // 卡片默认页签：设置 appSettings.factoryCardDefaultTab（'note'|'trend'，默认备注），factoryRun 时读取
+    let factoryDefaultTab = 'note'
 
     function injectFactoryStyles() {
       if (factoryStyleInjected || document.getElementById('alocs-factory-style')) {
@@ -562,7 +973,7 @@ export default defineContentScript({
         /* 右栏备注组：内部再分“备注 | 折线图”，占卡片约一半，保证两块都看得清 */
         .space-factory-card.alocs-card-restructured > .alocs-factory-mount {
           display: flex; position: relative; z-index: 20; background: #fff; box-sizing: border-box;
-          flex: 0 0 clamp(400px, 48%, 560px); margin-left: 10px; padding: 8px 10px 6px 12px;
+          flex: 0 0 clamp(400px, 48%, 560px); margin-left: 10px; padding: 8px 10px 0 12px;
           border-left: 1px solid #f0e6d6; }
       `
       document.head.appendChild(style)
@@ -661,6 +1072,7 @@ export default defineContentScript({
         memberId: mid,
         offerId: oid,
         note,
+        defaultTab: factoryDefaultTab,
         // 编辑/删除后重新拉取该工厂备注，直接更新响应式对象 → 组件自动刷新
         reload: async () => {
           factoryRequested.delete(name)
@@ -691,6 +1103,7 @@ export default defineContentScript({
           if (factoryRenderedCount === 0) console.log('[box:factory] 找工厂页渲染已被设置关闭（enableFactorySearch=false），不注入')
           return
         }
+        factoryDefaultTab = s.factoryCardDefaultTab === 'trend' ? 'trend' : 'note'
       } catch (e) {
         console.error('[box:factory] 读取设置失败:', e)
       }

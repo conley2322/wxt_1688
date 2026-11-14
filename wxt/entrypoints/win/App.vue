@@ -16,6 +16,44 @@ const store = useApiStore()
 const domStore = useDomStore()
 const viewerStats = ref([])
 const productDom = ref({})
+// ── 详情页停留计时（活跃度规则）：
+//    页面可见 + 最近 3 秒内有鼠标/键盘动作 → 每秒 +1；
+//    鼠标静止超 3 秒（挂机）或切到别的标签页 → 暂停；
+//    关闭/切走时把本次时长回填浏览流水（后台可看）──
+const dwellSeconds = ref(0)
+const dwellViewedAt = ref(0)
+const dwellText = computed(() => {
+  const s = dwellSeconds.value
+  const m = Math.floor(s / 60)
+  return m > 0 ? `${m}分${String(s % 60).padStart(2, '0')}秒` : `${s}秒`
+})
+let lastDwellActivity = Date.now()
+let reportedDwell = 0 // 本次页面会话已上报过的秒数（只报增量，避免切走/关掉多次上报重复累加）
+const markDwellActive = () => { lastDwellActivity = Date.now() }
+;['mousemove', 'mousedown', 'keydown', 'wheel', 'scroll', 'touchstart'].forEach(ev =>
+  document.addEventListener(ev, markDwellActive, { passive: true, capture: true }))
+function reportDwell() {
+  if (!dwellViewedAt.value || !store.currentOfferId) return
+  const delta = dwellSeconds.value - reportedDwell
+  if (delta <= 0) return
+  reportedDwell = dwellSeconds.value
+  try {
+    dataApi('/api/v1/view_records/duration', 'POST', {
+      offer_id: store.currentOfferId,
+      viewed_at: dwellViewedAt.value,
+      duration: delta, // 增量：后端累加到流水（5 分钟合并窗口内的刷新也累到同一条）
+    })
+  } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') reportDwell()
+})
+window.addEventListener('pagehide', reportDwell)
+setInterval(() => {
+  if (document.visibilityState !== 'visible') return // 切到别的标签页不计时
+  if (Date.now() - lastDwellActivity > 3000) return // 鼠标静止超 3 秒不计时
+  dwellSeconds.value++
+}, 1000)
 const currentTab = computed(() => {
   if (route.path.startsWith('/product')) return 'product'
   if (route.path.startsWith('/supplier')) return 'supplier'
@@ -49,7 +87,7 @@ onMounted(async () => {
   store.currentSupplierName = data.CompanyName || ''
   store.currentSupplierMemberId = data.memberId || ''
 
-  try {
+    try {
     // 上传浏览记录（后端自动处理商品入库 + 字段补充）
     const res = await store.recordBrowsing(
       data.productId,
@@ -65,6 +103,8 @@ onMounted(async () => {
         avatar_color: v.avatar_color || null,
         count: v.count
       }))
+      // 停留计时基准：本次浏览流水的时间戳，离开时按它精确回填时长
+      dwellViewedAt.value = res.data.viewed_at || 0
     }
 
     // 自动创建供应商（后台静默）
@@ -138,6 +178,10 @@ const viewerAvatars = computed(() =>
           <span class="view-count">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             {{ totalViewCount }}次
+          </span>
+          <span class="dwell-count" title="本次在详情页的停留时长">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            {{ dwellText }}
           </span>
           <span class="avatar-stack">
             <span
@@ -224,6 +268,15 @@ const viewerAvatars = computed(() =>
 .view-count {
   font-size: 11px;
   color: #888;
+  white-space: nowrap;
+}
+
+.dwell-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: #c9975c;
   white-space: nowrap;
 }
 

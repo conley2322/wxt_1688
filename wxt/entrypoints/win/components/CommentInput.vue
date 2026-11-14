@@ -16,7 +16,7 @@
         </svg>
         <span>保存</span>
       </button>
-      <button v-if="canFullscreen" class="action-btn fullscreen-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏编辑'">
+      <button v-if="canFullscreen && !hideFullscreen" class="action-btn fullscreen-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏编辑'">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <template v-if="!isFullscreen">
             <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
@@ -46,6 +46,7 @@ const props = defineProps({
   showToolbar: { type: Boolean, default: true }, // 找工厂卡片里隐藏工具栏（空间太小）
   memberId: { type: String, default: '' }, // 供应商 memberId，与名字共同作为备注的稳定键
   repOfferId: { type: String, default: '' }, // 找工厂卡的代表商品 offerId（后端反查公司名当别名）
+  hideFullscreen: { type: Boolean, default: false }, // 宿主自管全屏（找工厂卡全屏覆盖层内嵌时隐藏自带全屏按钮）
 })
 
 // 保存成功后抛给宿主（找工厂卡用它刷新统计）；win 页面不监听也不受影响
