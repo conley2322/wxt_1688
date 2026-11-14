@@ -16,10 +16,11 @@ const store = useApiStore()
 const domStore = useDomStore()
 const viewerStats = ref([])
 const productDom = ref({})
-// ── 详情页停留计时（周期规则）：
-//    一个周期 = 从打开详情页到彻底关闭；进入即开始计时（鼠标移出再移回不算新周期）；
-//    切到其他标签页只是暂停，暂停期间不写库；关闭时把整个周期的累计时长写入流水，
-//    并入 (offer_id, viewed_at) 那条记录（5 分钟合并窗口内的刷新也累到同一条），
+// ── 详情页停留计时（借鉴 time-tracker-4-browser 的机制，MIT）：
+//    页面每秒累加、每 5 秒把增量落库（关页/崩溃最多丢 5 秒，不存在关页时一次性总结报）；
+//    暂停条件（任一即暂停）：页面不可见、浏览器窗口失焦（用户在别的窗口干活）、
+//    用户空闲 ≥60 秒无鼠标/键盘/滚动操作（挂机不计入停留）；
+//    时长并入 (offer_id, viewed_at) 那条流水——每次进入都是一条新流水（进→关=一个闭环），
 //    显示上每个周期只有一条时长、无数据不显示 ──
 const dwellSeconds = ref(0)
 const dwellViewedAt = ref(0)
@@ -28,24 +29,65 @@ const dwellText = computed(() => {
   const m = Math.floor(s / 60)
   return m > 0 ? `${m}分${String(s % 60).padStart(2, '0')}秒` : `${s}秒`
 })
-let reportedDwell = 0 // 本次页面已上报过的秒数（增量基线：pagehide 可能多次触发，防重复累加）
+let reportedDwell = 0 // 本次页面已上报过的秒数（增量基线：可能多次触发，防重复累加）
 function reportDwell() {
   if (!dwellViewedAt.value || !store.currentOfferId) return
   const delta = dwellSeconds.value - reportedDwell
   if (delta <= 0) return
+  const baseline = reportedDwell
   reportedDwell = dwellSeconds.value
   try {
     dataApi('/api/v1/view_records/duration', 'POST', {
       offer_id: store.currentOfferId,
       viewed_at: dwellViewedAt.value,
-      duration: delta, // 增量：后端累加到流水（5 分钟合并窗口内的刷新也累到同一条）
-    })
+      duration: delta, // 增量：后端累加到流水（本页面会话对应的那条 viewed_at 记录）
+    }).then((res) => {
+      // SW 冷启动等导致的丢报：回退基线，下个周期把这段补报上
+      if (!res || res.code !== 200) reportedDwell = Math.min(reportedDwell, baseline)
+    }).catch(() => { reportedDwell = baseline })
   } catch {}
 }
+// 切走/切回（含最小化）、窗口失焦时先落一次库；关页时 pagehide 再兜底
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') reportDwell()
+})
+window.addEventListener('blur', reportDwell)
 window.addEventListener('pagehide', reportDwell)
+
+// ── 空闲检测（移植 tt4b IdleDetector）：≥60 秒无鼠标/键盘/滚动 → 挂机暂停计时 ──
+const DWELL_IDLE_MS = 60 * 1000
+let dwellLastActive = Date.now()
+let dwellIdle = false
+const dwellMarkActive = (() => {
+  let last = 0
+  return () => {
+    const now = Date.now()
+    if (now - last < 500) return // 节流 500ms，别让高频 mousemove 拖累页面
+    last = now
+    dwellLastActive = now
+  }
+})()
+// 注意：不能开 capture——scroll 用捕获会把 1688 页面里轮播图/懒加载的「程序化滚动」
+// 也收进来，空闲检测永不触发（32 分钟假停留的元凶）。冒泡阶段 window 只收用户滚页面。
+for (const ev of ['mousedown', 'mousemove', 'keydown', 'scroll', 'wheel', 'touchstart']) {
+  window.addEventListener(ev, dwellMarkActive, { passive: true })
+}
+
 setInterval(() => {
   if (document.visibilityState !== 'visible') return // 切走（含切到其他产品页）= 暂停，不计时也不写库
+  if (!document.hasFocus()) return // 浏览器窗口失焦（用户在别的窗口干活）= 暂停
+  const idle = Date.now() - dwellLastActive >= DWELL_IDLE_MS
+  if (idle) {
+    if (!dwellIdle) { // 刚进入挂机：先把已累计的落库，之后不再计时
+      dwellIdle = true
+      reportDwell()
+    }
+    return
+  }
+  dwellIdle = false
   dwellSeconds.value++
+  // 每 5 秒增量落库一次：关页瞬间 runtime 消息不可靠，靠周期上报保证时长不丢（最多丢最后 5 秒）
+  if (dwellSeconds.value - reportedDwell >= 5) reportDwell()
 }, 1000)
 const currentTab = computed(() => {
   if (route.path.startsWith('/product')) return 'product'

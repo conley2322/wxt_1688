@@ -236,7 +236,7 @@ onBeforeUnmount(() => {
       <div class="chart-block">
         <div class="block-head">
           <span class="block-title">浏览时间轴</span>
-          <span class="block-sub">滚到底部自动刷新</span>
+          <span class="block-sub">点格子看当天 · 格子越绿停留越久</span>
         </div>
         <div class="timeline-box">
           <ViewTimeline
@@ -303,7 +303,7 @@ onBeforeUnmount(() => {
 }
 .range-btn.active { color: #1677ff; border-color: #1677ff; background: #f0f7ff; }
 .chart-box { width: 100%; height: 170px; }
-.timeline-box { height: 190px; }
+.timeline-box { height: 330px; }
 
 /* 时间信息 */
 .time-info {

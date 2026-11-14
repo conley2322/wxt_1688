@@ -83,11 +83,20 @@ export const useDomStore = defineStore('dom', () => {
         || archiveOrdinaryFactoryAddress2?.innerText
         || archiveOrdinaryFactoryAddress3?.innerText
 
-      const titles = document.querySelector('#productTitle > div > div.title-content > h1')?.innerText
-        || document.querySelector('#root-container .title-text')?.innerText
-        // 页面改版兜底：og:title 常驻 <head>；document.title 形如「商品名-阿里巴巴」
+      // 取元素文本第一行非空行（容器型节点的 innerText 会带「商品库存高稳定」等噪音行）
+      const firstLine = el => {
+        if (!el) return ''
+        const line = String(el.innerText || '').split('\n').map(s => s.trim()).filter(Boolean)[0]
+        return line || ''
+      }
+      const titles = firstLine(document.querySelector('#productTitle > div > div.title-content > h1'))
+        || firstLine(document.querySelector('#root-container .title-text'))
+        // 新版页面 #productTitle 还在、内层结构变了的兜底（2026-11-14 实测 type-c 页全选择器失配）
+        || firstLine(document.querySelector('#productTitle'))
+        // 页面改版兜底：部分版本无 og:title；document.title 形如「商品名 - 阿里巴巴」——
+        // 只剥站点后缀，不能 split('-')（标题本身含连字符，type-c 会被截成 "type"）
         || document.querySelector('meta[property="og:title"]')?.content
-        || (document.title || '').split('-')[0].trim()
+        || (document.title || '').replace(/\s*[-–—]\s*(阿里巴巴|1688\.com|alibaba\.com)\s*$/i, '').trim()
         || ''
 
       // 安全获取图片URL

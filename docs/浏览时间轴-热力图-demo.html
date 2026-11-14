@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>浏览时间轴 · 热力图 demo（ECharts 真渲染）</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
+<style>
+  :root{
+    --gold:#c9975c; --green:#8fbf9f; --green-deep:#4a7c5e; --blue:#1677ff;
+    --t1:#333; --t2:#888; --t3:#aaa; --t4:#c0c4cc;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    background:#f5f6f7; color:var(--t1); font-size:13px; padding:28px 24px 60px;}
+  .page{max-width:1180px; margin:0 auto;}
+  .hero h1{font-size:22px;}
+  .hero p{color:var(--t2); font-size:13px; margin-top:6px; line-height:1.7;}
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:20px;}
+  @media (max-width:980px){ .grid{grid-template-columns:1fr;} }
+  .card{background:#fff; border:1px solid #e8e8e8; border-radius:12px; padding:18px; }
+  .card-head{display:flex; align-items:center; gap:10px;}
+  .tag{background:var(--gold); color:#fff; font-size:11px; font-weight:600; border-radius:6px; padding:3px 8px; flex-shrink:0;}
+  .tag.gray{background:#9aa3ad;}
+  .card-head h2{font-size:16px;}
+  .desc{font-size:12px; color:var(--t2); margin-top:6px; line-height:1.7;}
+  .panel{width:360px; background:#fff; border:1px solid #e5e6eb; border-radius:10px;
+    box-shadow:0 2px 8px rgba(0,0,0,.05); overflow:hidden; margin:12px auto 0;}
+  .p-total{font-size:11px; color:var(--t2); padding:5px 10px 3px; border-bottom:1px dashed #f0f0f0;}
+  .p-total b{color:var(--gold); font-weight:600;}
+  .p-body{padding:6px 10px;}
+  .p-status{font-size:10px; color:var(--t4); text-align:center; padding:3px 0 5px; border-top:1px dashed #f5f5f5;}
+  .tip{font-size:11px; color:var(--t3); margin-top:8px; line-height:1.6;}
+
+  /* 当日明细 */
+  .d-head{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--t2);
+    padding:6px 2px 4px; font-weight:600;}
+  .d-head b{color:var(--t1);}
+  .d-head .dsum{margin-left:auto; color:var(--green-deep); font-weight:600; font-size:11px;}
+  .chips{display:flex; flex-wrap:wrap; gap:6px; padding:2px 2px 6px;}
+  .chip{font-size:10px; padding:3px 9px; border-radius:11px; background:#f4f5f7; color:var(--t3); white-space:nowrap;}
+  .chip b{font-weight:600;}
+  .chip.g1{background:#eaf3ed; color:var(--green-deep);}
+  .chip.g2{background:#d8eadd; color:var(--green-deep);}
+  .chip.g3{background:#bcdcc8; color:#335c43;}
+  .v-row{display:flex; align-items:center; gap:8px; padding:3px 2px; font-size:11px;}
+  .v-time{color:var(--t2); width:44px;}
+  .meter{flex:1; height:6px; border-radius:3px; background:#f1f2f4; overflow:hidden;}
+  .meter i{display:block; height:100%; border-radius:3px; background:linear-gradient(90deg,#a9cfb6,#7fb28f);}
+  .meter.z i{display:none;}
+  .v-sec{color:var(--green-deep); font-weight:600; width:44px; text-align:right;}
+  .v-sec.z{color:var(--t4); font-weight:400;}
+  .d-empty{font-size:11px; color:var(--t4); text-align:center; padding:14px 0;}
+
+  /* 开源说明 */
+  table{width:100%; border-collapse:collapse; font-size:12px; margin-top:10px;}
+  th,td{border:1px solid #eee; padding:7px 10px; text-align:left; line-height:1.5;}
+  th{background:#fafafa; color:var(--t2); font-weight:600;}
+  td b{color:var(--t1);}
+  .lic{display:inline-block; font-size:10px; padding:1px 6px; border-radius:4px; background:#eef4ff; color:#3b6db4;}
+  .yes{color:#3e8e5c; font-weight:600;}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero">
+    <h1>浏览时间轴 × 热力图 · 可运行 demo</h1>
+    <p>真渲染（ECharts，就是插件里已在用的那个开源库）。左边是 GitHub 式<b>按天日历热力图</b>——格子越绿 = 那天在这件商品上停得越久，<b>点格子看当天逐次明细</b>；右边是项目里已有的<b>星期×小时</b>组件同款（HsHeatmap.vue，后台数据概览在用的橙色格）。数据为模拟，今天塞的是你那 6 条真实记录。</p>
+  </div>
+
+  <div class="grid">
+    <!-- ============ 日历热力图 ============ -->
+    <section class="card">
+      <div class="card-head"><span class="tag">示例 1</span><h2>按天日历热力图（方案 D 真渲染）</h2></div>
+      <p class="desc">放进浏览时间轴面板的效果：统计行不动，列表区换成 GitHub 式<b>正方形小方格</b>（13×13）+ 点击展开的当日明细。近 150 天一眼看出「哪几天去得多、待得久」，历史再多也不刷屏。</p>
+      <div class="panel">
+        <div class="p-total">近 150 天浏览 <b>86</b> 次 · 共停留 <b>42分</b> · 点格子看当天</div>
+        <div class="p-body">
+          <div id="calChart" style="width:100%; height:132px;"></div>
+          <div class="d-head"><b id="dTitle">—</b><span class="dsum" id="dSum"></span></div>
+          <div id="dDetail"><div class="d-empty">点上面任意绿格子 → 这里显示当天每一次浏览</div></div>
+        </div>
+        <div class="p-status">滚动到底部自动刷新</div>
+      </div>
+      <p class="tip">格子颜色 = 当天总停留时长（无数据灰、久→深绿）。悬浮显示次数与总秒数；点击展开明细。实现 = echarts calendar 坐标系 + heatmap series，约 40 行配置。</p>
+    </section>
+
+    <!-- ============ 星期×小时 ============ -->
+    <section class="card">
+      <div class="card-head"><span class="tag gray">示例 2</span><h2>星期 × 小时热力图（后台已有组件同款）</h2></div>
+      <p class="desc">回答你的问题用现成的就够了：<b>HsHeatmap.vue</b>（wxt/components/）就是开源 ECharts 的 heatmap 系列画的「星期×小时浏览热力图」，后台 Dashboard、我的货源、IM 供应商数据概览里已经在线上跑。</p>
+      <div class="panel">
+        <div class="p-total">什么时候去看的：<b>工作日下午 16-18 点最勤</b></div>
+        <div class="p-body">
+          <div id="wkChart" style="width:100%; height:114px;"></div>
+        </div>
+        <div class="p-status">悬浮看「周几 · 几点 · 浏览几次」</div>
+      </div>
+      <p class="tip">这张的值 = 浏览次数（不是秒数），配色沿用 HsHeatmap 的橙色系。适合回答「我一般什么时间逛」；按天看停留多久则是左边那张。</p>
+    </section>
+  </div>
+
+  <!-- ============ 开源说明 ============ -->
+  <section class="card" style="margin-top:20px;">
+    <div class="card-head"><span class="tag">开源情况</span><h2>热力图是图表类型，画它的库基本都是开源的</h2></div>
+    <p class="desc">「热力图（heatmap）」是一种标准图表类型，不是哪家的专有技术。能画它的开源库很多，你项目已经装了一个：</p>
+    <table>
+      <tr><th>库</th><th>协议</th><th>说明</th></tr>
+      <tr><td><b>ECharts</b>（项目在用 ✅）</td><td><span class="lic">Apache-2.0</span></td><td>Apache 基金会开源，<span class="yes">免费商用</span>。package.json 里 echarts ^6.1.0 已打进插件 bundle；热力图是内置 series（type:'heatmap'），<b>不用新装任何东西</b>。趋势折线图、停留排行、HsHeatmap 全是它画的。</td></tr>
+      <tr><td>cal-heatmap</td><td><span class="lic">MIT</span></td><td>专做 GitHub 式日历热力图的小库（~10KB），比 echarts 轻，但要多带一个依赖。</td></tr>
+      <tr><td>Chart.js + matrix 插件</td><td><span class="lic">MIT</span></td><td>热力图要靠第三方 matrix 插件拼，不如 echarts 内置省事。</td></tr>
+      <tr><td>D3 / ApexCharts</td><td><span class="lic">ISC / MIT</span></td><td>都能画，但项目没必要再引第二套图表库。</td></tr>
+      <tr><td>GitHub 贡献格子</td><td>—</td><td>GitHub 那张 Contributions 热力图是它自家自绘的 DOM，没有公开库；echarts 的 calendar+heatmap 可以做到一样的效果（左边示例就是）。</td></tr>
+      <tr><td>Highcharts</td><td>非开源</td><td>商用要付费授权，不碰。</td></tr>
+    </table>
+    <p class="desc" style="margin-top:10px;">结论：<b>要用就是 ECharts，零新依赖</b>。按天停留（日历热力图）和星期×小时（已有 HsHeatmap）两张图它都能出；唯一要写的是把 view-timeline 数据聚合成「天→总停留秒」和「星期×小时→次数」两个数组。</p>
+  </section>
+</div>
+
+<script>
+/* ================= 模拟数据（确定性伪随机，刷新不变） ================= */
+function rng(seed){ let s=seed>>>0; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; } }
+const rand = rng(20261114);
+const DAY = 86400000;
+const today = new Date(); today.setHours(0,0,0,0);
+
+// 今天 = 你那 6 条真实记录；其余 34 天模拟（有的天不去、有的天集中逛）
+const byDay = {};  // 'YYYY-MM-DD' -> [{t:'16:45', sec:17}, ...]
+function dstr(d){ const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
+byDay[dstr(today)] = [
+  {t:'16:18', sec:0}, {t:'16:18', sec:0}, {t:'16:45', sec:17},
+  {t:'16:46', sec:8}, {t:'16:46', sec:24}, {t:'16:46', sec:0},
+];
+for(let i=1;i<154;i++){
+  const d = new Date(today.getTime()-i*DAY);
+  const wk = d.getDay(); if(wk===0) continue;                    // 周日不逛
+  const n = rand()<0.28 ? 0 : 1+Math.floor(rand()*5);            // 0~5 次
+  if(!n) continue;
+  const arr=[];
+  for(let k=0;k<n;k++){
+    const h = 9+Math.floor(rand()*10);                           // 9~18 点
+    const m = Math.floor(rand()*60);
+    const sec = rand()<0.3 ? 0 : 5+Math.floor(rand()*115);       // 三成快速划过
+    arr.push({t:`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`, sec});
+  }
+  arr.sort((a,b)=>a.t<b.t?-1:1);
+  byDay[dstr(d)] = arr;
+}
+const daySec = {}, dayCnt = {}, dayVisits = {};
+Object.entries(byDay).forEach(([k,v])=>{
+  daySec[k]=v.reduce((s,x)=>s+x.sec,0); dayCnt[k]=v.length; dayVisits[k]=v;
+});
+const calData = Object.keys(daySec).map(k=>[k, daySec[k], dayCnt[k]]);
+const totalCnt = calData.reduce((s,d)=>s+d[2],0);
+const totalSec = calData.reduce((s,d)=>s+d[1],0);
+
+/* ================= 示例1：日历热力图 ================= */
+document.querySelector('.p-total b').textContent = totalCnt;
+document.querySelector('.p-total').innerHTML =
+  `近 150 天浏览 <b>${totalCnt}</b> 次 · 共停留 <b>${totalSec>0?fmtSec(totalSec):'—'}</b> · 点格子看当天`;
+const cal = echarts.init(document.getElementById('calChart'));
+const START = dstr(new Date(today.getTime()-153*DAY));
+const END = dstr(today);
+function fmtSec(s){
+  if(s<60) return s+'秒';
+  const m=Math.floor(s/60);
+  if(m<60) return m+'分'+(s%60?(s%60)+'秒':'');
+  return Math.floor(m/60)+'小时'+(m%60?m%60+'分':'');
+}
+cal.setOption({
+  visualMap:{ min:0, max:Math.max(60, ...calData.map(d=>d[1])), show:false,
+    inRange:{ color:['#e8eee9','#a9cfb6','#6ea985','#3e6b52'] } },
+  calendar:{
+    top:20, left:'center', cellSize:13,
+    range:[START, END],
+    itemStyle:{ color:'#fafafa', borderColor:'#fff', borderWidth:2 },
+    splitLine:{ show:false },
+    dayLabel:{ firstDay:1, nameMap:['日','一','二','三','四','五','六'], fontSize:9, color:'#bbb' },
+    monthLabel:{ nameMap:'cn', fontSize:10, color:'#999' },
+    yearLabel:{ show:false },
+  },
+  series:[{
+    type:'heatmap', coordinateSystem:'calendar', data:calData,
+    itemStyle:{ borderRadius:3 },
+  }],
+  tooltip:{
+    formatter: p => {
+      const [d,sec,cnt] = p.value;
+      return `${d.slice(5)} · 浏览 ${cnt} 次 · 停留 ${sec>0?fmtSec(sec):'—'}`;
+    },
+  },
+});
+// 点击某天 → 当日逐次明细
+cal.on('click', p=>{
+  if(p.componentType!=='series') return;
+  const d = p.value[0], vis = dayVisits[d]||[];
+  const maxS = Math.max(...vis.map(v=>v.sec), 1);
+  document.getElementById('dTitle').textContent = d.slice(5).replace('-','/');
+  document.getElementById('dSum').textContent = `${dayCnt[d]} 次 · ${daySec[d]>0?'停留 '+fmtSec(daySec[d]):'未计时'}`;
+  document.getElementById('dDetail').innerHTML = vis.map(v=>{
+    const lvl = v.sec===0?'z' : v.sec>=60?'g3' : v.sec>=30?'g2' : 'g1';
+    const chipCls = v.sec===0?'' : v.sec>=60?'g3' : v.sec>=30?'g2' : 'g1';
+    return `<div class="v-row"><span class="v-time">${v.t}</span>
+      <span class="meter ${v.sec===0?'z':''}"><i style="width:${Math.round(v.sec/maxS*100)}%"></i></span>
+      <span class="v-sec ${v.sec===0?'z':''}">${v.sec>0?fmtSec(v.sec):'—'}</span></div>`;
+  }).join('') ;
+});
+// 默认展开今天
+(function(){ const k=dstr(today), vis=byDay[k];
+  document.getElementById('dTitle').textContent = '今天 11/14';
+  document.getElementById('dSum').textContent = `6 次 · 停留 49秒`;
+  const maxS = Math.max(...vis.map(v=>v.sec), 1);
+  document.getElementById('dDetail').innerHTML = vis.map(v=>`<div class="v-row"><span class="v-time">${v.t}</span><span class="meter ${v.sec===0?'z':''}"><i style="width:${Math.round(v.sec/maxS*100)}%"></i></span><span class="v-sec ${v.sec===0?'z':''}">${v.sec>0?fmtSec(v.sec):'—'}</span></div>`).join('');
+})();
+
+/* ================= 示例2：星期×小时（HsHeatmap 同款） ================= */
+const WEEK=['周一','周二','周三','周四','周五','周六','周日'];
+const wk = Array.from({length:7},()=>Array(24).fill(0));
+Object.entries(byDay).forEach(([k,v])=>{
+  const wd=(new Date(k+'T00:00:00').getDay()+6)%7;   // 0=周一
+  v.forEach(x=>{ wk[wd][+x.t.slice(0,2)]++; });
+});
+const wkData=[]; let wkMax=0;
+wk.forEach((row,wd)=>row.forEach((c,h)=>{ if(c){ wkData.push([h,wd,c]); if(c>wkMax)wkMax=c; } }));
+const wkChart = echarts.init(document.getElementById('wkChart'));
+wkChart.setOption({
+  grid:{ left:34, right:8, top:6, bottom:22 },
+  tooltip:{ formatter:p=>`${WEEK[p.value[1]]} ${p.value[0]}时 · 浏览 ${p.value[2]} 次` },
+  xAxis:{ type:'category', data:Array.from({length:24},(_,i)=>i),
+    axisLine:{show:false}, axisTick:{show:false},
+    axisLabel:{ color:'#999', fontSize:9, interval:2 } },
+  yAxis:{ type:'category', data:WEEK, axisLine:{show:false}, axisTick:{show:false},
+    axisLabel:{ color:'#999', fontSize:9 } },
+  visualMap:{ min:0, max:Math.max(1,wkMax), calculable:false, orient:'horizontal',
+    left:'center', bottom:-4, itemWidth:10, itemHeight:60, show:false,
+    inRange:{ color:['#fff7ee','#ffd8ad','#ff9d4d','#ff5b00'] } },
+  series:[{ type:'heatmap', data:wkData, label:{show:false},
+    itemStyle:{ borderWidth:1, borderColor:'#fff', borderRadius:2 } }],
+});
+window.addEventListener('resize', ()=>{ cal.resize(); wkChart.resize(); });
+</script>
+</body>
+</html>

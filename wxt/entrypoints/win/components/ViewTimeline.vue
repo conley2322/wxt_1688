@@ -1,78 +1,54 @@
 <script setup>
-// 商品浏览时间轴：谁在什么时候浏览了这个商品、停留了多久
-// 正序排列（旧在上、新在下，从下往上长），打开时定位到最新（底部）
-// 分批渲染：先渲染最近 10 条，往上滚动加载更早的记录（100 条也不卡）
-// 顶部常驻总统计：浏览 N 次 · 共停留 X（本商品详情页累计查看时长）
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+// 商品浏览时间轴（方案 D：按天日历热力图）
+// 顶部常驻总统计；热力图近 150 天、格子越绿 = 那天停留越久（正方形小方格）；
+// 点格子查看当天每一次浏览；窗口外的更早有记录天折叠在明细下方，点击同样展开
+import { ref, computed, watch, onMounted } from 'vue'
 import { api } from '@/utils/dataClient.js'
+import HsCalendarHeatmap from '@/components/HsCalendarHeatmap.vue'
 
 const props = defineProps({
   target: { type: [String, Number], required: true },
 })
 
-const list = ref([])          // 全量记录（正序）
-const totalDwell = ref(0)     // 总停留秒数
-const visibleCount = ref(10)  // 当前渲染条数（从最新一条往回扩）
-const scrollEl = ref(null)
-const refreshing = ref(false)
-let lastRefreshAt = 0
-let atBottom = true // 打开时定位到最新（底部）
+const list = ref([])        // 全量浏览记录（正序）
+const totalDwell = ref(0)   // 总停留秒数
+const daily = ref([])       // [{date:'YYYY-MM-DD', count, dwell}] 全历史按天聚合
+const selected = ref('')    // 当前选中的天
 
-// 分批展示：正序列表的最后 N 条（最新在上文方向……实际显示为旧→新，底部是最新）
-const displayed = computed(() => list.value.slice(Math.max(0, list.value.length - visibleCount.value)))
-const hiddenOlder = computed(() => list.value.length - displayed.value.length)
-
-async function load(scrollToBottom) {
+async function load() {
   const res = await api(`/api/v1/products/${encodeURIComponent(props.target)}/view-timeline`)
   if (res.code === 200) {
     list.value = res.data
     totalDwell.value = res.total_dwell || 0
-    if (scrollToBottom) await nextTick(scrollToEnd)
+    daily.value = res.daily || []
+    // 默认选中最近有记录的一天
+    if (!selected.value || !daily.value.some(d => d.date === selected.value)) {
+      selected.value = daily.value.length ? daily.value[daily.value.length - 1].date : ''
+    }
   }
 }
 
-function scrollToEnd() {
-  const el = scrollEl.value
-  if (el) el.scrollTop = el.scrollHeight
-}
+onMounted(() => load())
+watch(() => props.target, () => { selected.value = ''; load() })
 
-function onScroll() {
-  const el = scrollEl.value
-  if (!el) return
-  // 距底部 40px 以内视为"贴底"→ 触发刷新
-  atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-  // 顶到 40px 以内且还有更早记录 → 往前扩 10 条，并保持视口不跳
-  if (el.scrollTop < 40 && hiddenOlder.value > 0) {
-    const prevHeight = el.scrollHeight
-    const prevTop = el.scrollTop
-    visibleCount.value = Math.min(visibleCount.value + 10, list.value.length)
-    nextTick(() => {
-      el.scrollTop = el.scrollHeight - prevHeight + prevTop
-    })
-  }
-  if (atBottom) triggerRefresh()
+function dateKey(ts) {
+  const d = new Date(ts)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
-
-// 下拉到底自动刷新：先让 background 同步，再重载；10 秒冷却
-async function triggerRefresh() {
-  if (refreshing.value) return
-  const now = Date.now()
-  if (now - lastRefreshAt < 10000) return
-  refreshing.value = true
-  lastRefreshAt = now
-  try {
-    await browser.runtime.sendMessage({ type: 'remote-sync' })
-    await load(false)
-    await nextTick(scrollToEnd)
-  } catch {
-    // 未连接服务器时静默忽略
-  } finally {
-    setTimeout(() => { refreshing.value = false }, 800)
-  }
-}
-
-onMounted(() => load(true))
-watch(() => props.target, () => { visibleCount.value = 10; load(true) })
+// 选中天的逐次明细（正序）
+const dayItems = computed(() =>
+  selected.value ? list.value.filter(it => dateKey(it.viewed_at) === selected.value) : [])
+const dayStat = computed(() => daily.value.find(d => d.date === selected.value))
+const dayMax = computed(() => Math.max(...dayItems.value.map(it => it.duration || 0), 1))
+// 热力图窗口（近 150 天）之外仍有记录的更早天（降序），点击同样展开明细
+const windowStart = computed(() => {
+  const d = new Date(Date.now() - 149 * 86400000)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+})
+const olderDays = computed(() =>
+  daily.value.filter(d => d.date < windowStart.value).slice().sort((a, b) => (a.date < b.date ? 1 : -1)))
 
 const AVATAR_COLORS = ['#f59e0b', '#3b82f6', '#10b981', '#ef4444', '#8b5cf6', '#ec4444', '#14b8a6', '#f97316']
 function avatarColor(name, mine) {
@@ -81,12 +57,10 @@ function avatarColor(name, mine) {
   for (const ch of String(name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0
   return AVATAR_COLORS[h % AVATAR_COLORS.length]
 }
-function fmt(ts) {
+function fmtTime(ts) {
   const d = new Date(ts)
   const p = n => String(n).padStart(2, '0')
-  const now = new Date()
-  const sameDay = d.toDateString() === now.toDateString()
-  return `${sameDay ? '今天' : `${d.getMonth() + 1}/${d.getDate()}`} ${p(d.getHours())}:${p(d.getMinutes())}`
+  return `${p(d.getHours())}:${p(d.getMinutes())}`
 }
 // 停留秒数 → 50秒 / 3分12秒 / 1小时5分
 function fmtDwell(sec) {
@@ -105,23 +79,44 @@ function fmtDwell(sec) {
     <div class="vt-total" v-if="list.length">
       浏览 <b>{{ list.length }}</b> 次
       <template v-if="totalDwell > 0"> · 共停留 <b class="gold">{{ fmtDwell(totalDwell) }}</b></template>
-      <span v-if="hiddenOlder > 0" class="vt-more-hint">（上滑加载更早 {{ hiddenOlder }} 条）</span>
+      <span class="vt-hint">近 150 天 · 格子越绿停留越久</span>
     </div>
-    <div ref="scrollEl" class="vt-scroll" @scroll="onScroll">
+    <div class="vt-scroll">
       <div v-if="!list.length" class="vt-empty">暂无浏览记录</div>
+      <template v-else>
+        <HsCalendarHeatmap :daily="daily" @pick="selected = $event" />
 
-      <div v-for="(item, i) in displayed" :key="item.viewed_at + '-' + i" class="vt-item">
-        <span class="vt-dot" :style="{ background: avatarColor(item.nickname, item.mine) }"></span>
-        <span class="vt-line"></span>
-        <span class="vt-avatar" :style="{ background: avatarColor(item.nickname, item.mine) }">
-          {{ (item.nickname || '?').slice(0, 1) }}
-        </span>
-        <span class="vt-name">{{ item.mine ? '我' : item.nickname }}</span>
-        <span class="vt-dwell" v-if="item.duration">停留 {{ fmtDwell(item.duration) }}</span>
-        <span class="vt-time">{{ fmt(item.viewed_at) }}</span>
-      </div>
+        <!-- 选中天的逐次明细 -->
+        <div class="vt-day" v-if="selected && dayItems.length">
+          <div class="vt-day-head">
+            <b>{{ selected.slice(5).replace('-', '/') }}</b>
+            <span class="vt-day-sum">
+              {{ dayItems.length }} 次<template v-if="dayStat && dayStat.dwell > 0"> · 停留 {{ fmtDwell(dayStat.dwell) }}</template>
+            </span>
+          </div>
+          <div v-for="(it, i) in dayItems" :key="it.viewed_at + '-' + i" class="vt-row">
+            <span class="vt-avatar" :style="{ background: avatarColor(it.nickname, it.mine) }">
+              {{ it.mine ? '我' : (it.nickname || '?').slice(0, 1) }}
+            </span>
+            <span class="vt-name">{{ it.mine ? '我' : it.nickname }}</span>
+            <span class="meter" :class="{ z: !it.duration }"><i :style="{ width: Math.round((it.duration || 0) / dayMax * 100) + '%' }"></i></span>
+            <span class="vt-dwell" :class="{ z: !it.duration }">{{ it.duration ? fmtDwell(it.duration) : '—' }}</span>
+            <span class="vt-time">{{ fmtTime(it.viewed_at) }}</span>
+          </div>
+        </div>
+
+        <!-- 热力图窗口外更早的有记录天 -->
+        <template v-if="olderDays.length">
+          <div class="vt-older-head">更早（{{ olderDays.length }} 天，点击展开）</div>
+          <div v-for="d in olderDays" :key="d.date" class="vt-older-row" @click="selected = d.date">
+            <b>{{ d.date.slice(5).replace('-', '/') }}</b>
+            <span>{{ d.count }} 次</span>
+            <span class="vt-older-dwell" v-if="d.dwell > 0">{{ fmtDwell(d.dwell) }}</span>
+          </div>
+        </template>
+      </template>
     </div>
-    <div class="vt-status">{{ refreshing ? '正在刷新…' : '滚动到底部自动刷新' }}</div>
+    <div class="vt-status">点热力图格子查看当天每一次浏览</div>
   </div>
 </template>
 
@@ -140,12 +135,12 @@ function fmtDwell(sec) {
   border-bottom: 1px dashed #f0f0f0;
 }
 .vt-total b { color: #c9975c; font-weight: 600; }
-.vt-more-hint { color: #bbb; font-size: 10px; }
+.vt-hint { color: #bbb; font-size: 10px; margin-left: 6px; }
 .vt-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 6px 8px 2px 10px;
+  padding: 6px 8px 2px;
 }
 .vt-empty {
   font-size: 12px;
@@ -153,60 +148,66 @@ function fmtDwell(sec) {
   text-align: center;
   padding: 20px 0;
 }
-.vt-item {
-  position: relative;
+/* 选中天明细 */
+.vt-day-head {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: #333;
+  padding: 4px 2px 2px;
+}
+.vt-day-head b { font-weight: 600; }
+.vt-day-sum { margin-left: auto; font-size: 11px; color: #4a7c5e; font-weight: 600; }
+.vt-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 0;
-}
-/* 时间轴竖线 */
-.vt-line {
-  position: absolute;
-  left: 14px;
-  top: 0;
-  bottom: -5px;
-  width: 2px;
-  background: #eee;
-  z-index: 0;
-}
-.vt-item:last-child .vt-line {
-  display: none;
-}
-.vt-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  z-index: 1;
-  flex-shrink: 0;
+  padding: 3px 2px;
 }
 .vt-avatar {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
-.vt-name {
-  font-size: 12px;
-  color: #333;
-  font-weight: 600;
+.vt-name { font-size: 12px; color: #333; font-weight: 600; white-space: nowrap; }
+.meter {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: #f1f2f4;
+  overflow: hidden;
+  min-width: 30px;
 }
-.vt-dwell {
+.meter i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #a9cfb6, #7fb28f); }
+.meter.z i { display: none; }
+.vt-dwell { font-size: 10px; color: #4a7c5e; font-weight: 600; width: 52px; text-align: right; white-space: nowrap; }
+.vt-dwell.z { color: #c0c4cc; font-weight: 400; }
+.vt-time { font-size: 11px; color: #aaa; width: 38px; text-align: right; }
+/* 更早折叠 */
+.vt-older-head {
   font-size: 10px;
-  color: #8fbf9f;
-  white-space: nowrap;
+  color: #c0c4cc;
+  padding: 8px 2px 2px;
 }
-.vt-time {
+.vt-older-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
-  color: #aaa;
-  margin-left: auto;
+  color: #888;
+  padding: 4px 2px;
+  border-top: 1px dashed #f2f2f2;
+  cursor: pointer;
 }
+.vt-older-row b { color: #333; font-weight: 600; }
+.vt-older-row:hover { background: #f7f9f8; }
+.vt-older-dwell { margin-left: auto; color: #4a7c5e; font-weight: 600; }
 .vt-status {
   font-size: 10px;
   color: #c0c4cc;

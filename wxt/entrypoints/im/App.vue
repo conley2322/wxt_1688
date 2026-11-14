@@ -20,6 +20,7 @@ import OthersComments from '@/entrypoints/win/components/OthersComments.vue'
 import HsTrendChart from '@/components/HsTrendChart.vue'
 import HsHourlyChart from '@/components/HsHourlyChart.vue'
 import HsHeatmap from '@/components/HsHeatmap.vue'
+import HsDwellCharts from '@/components/HsDwellCharts.vue'
 import { groupFactoryInfo, fmtProfileTime } from '@/utils/factoryInfo.js'
 import { getImDoc, onImShow, onImDocChange, onChatUpdated, extractHeaderName, extractRenderedArchive, insertIntoChatInput, readNativeArchive, setResolvedSupplier } from './imdom.js'
 
@@ -75,6 +76,11 @@ const supplierName = ref('')
 const resolveSource = ref('')   // binding | detail | offer | archive | header-name | ''
 const loginId = ref(urlLoginId) // 当前会话显示名（随会话切换更新）
 const products = ref([])
+// 浏览时长排行：该供应商各商品停留总时长降序（分组接口的 dwell_seconds 直接可用）
+const dwellRank = computed(() => (products.value || [])
+  .map(p => ({ offer_id: p.offer_id, title: p.title || p.offer_id, dwell: p.dwell_seconds || 0, views: p.view_count || 0 }))
+  .filter(p => p.dwell > 0)
+  .sort((a, b) => b.dwell - a.dwell))
 const archiveInfo = ref(null)   // 档案基础信息 { companyName, year, tradeType, bsr }
 const loadedOnce = ref(false)
 
@@ -797,18 +803,29 @@ watch(aiKey, () => {
             <div class="stat-card"><span class="sc-num">{{ supStats ? fmtDwell(supStats.totals?.dwell_seconds) : '—' }}</span><span class="sc-label">停留</span></div>
           </div>
           <div v-if="supStats?.last_view_at" class="info-row"><span class="info-key">最近浏览</span><span class="info-val">{{ fmtTs(supStats.last_view_at) }}</span></div>
-          <HsTrendChart v-if="supStats?.daily?.length" :daily="supStats.daily" :height="130" />
-          <div class="page-row-title" style="margin-top: 10px">浏览时段分布</div>
-          <HsHourlyChart v-if="supStats?.hourly?.length" :hourly="supStats.hourly" :height="110" />
-          <div class="page-row-title" style="margin-top: 10px">浏览热力图 <span class="sec-tip">（星期 × 小时）</span></div>
-          <HsHeatmap v-if="supStats?.heatmap?.length" :heatmap="supStats.heatmap" :height="150" />
-          <div class="page-row-title" style="margin-top: 10px">浏览时间轴</div>
-          <div v-if="!supStats?.timeline?.length" class="empty-tip">暂无浏览记录</div>
-          <div v-for="t in (supStats?.timeline || []).slice(0, 12)" :key="t.ts + t.offer_id" class="tl-row" @click="openOffer(t.offer_id)">
-            <span class="tl-time">{{ fmtTs(t.ts) }}</span>
-            <span class="tl-title" :title="t.title">{{ t.title || t.offer_id }}</span>
+          <!-- 图表小方牌：弹性网格，窄面板自动单列 -->
+          <div class="dp-grid">
+            <div class="dp-card">
+              <div class="dp-title">近 30 天 出现 / 浏览趋势</div>
+              <HsTrendChart v-if="supStats?.daily?.length" :daily="supStats.daily" :height="130" />
+              <div v-else class="empty-tip">暂无数据</div>
+            </div>
+            <div class="dp-card">
+              <div class="dp-title">浏览时段分布 <span class="dp-tip">24 小时</span></div>
+              <HsHourlyChart v-if="supStats?.hourly?.length" :hourly="supStats.hourly" :height="130" />
+              <div v-else class="empty-tip">暂无数据</div>
+            </div>
+            <div class="dp-card">
+              <div class="dp-title">浏览热力图 <span class="dp-tip">星期 × 小时</span></div>
+              <HsHeatmap v-if="supStats?.heatmap?.length" :heatmap="supStats.heatmap" :height="150" />
+              <div v-else class="empty-tip">暂无数据</div>
+            </div>
+            <div class="dp-card">
+              <div class="dp-title">浏览时长排行 <span class="dp-tip">停留总时长 · 点击跳商品</span></div>
+              <HsDwellCharts v-if="dwellRank.length" :list="dwellRank" :height="Math.max(90, dwellRank.length * 24 + 36)" @pick="openOffer($event.offer_id)" />
+              <div v-else class="empty-tip">暂无停留记录</div>
+            </div>
           </div>
-          <div v-if="(supStats?.timeline || []).length > 12" class="empty-tip">仅显示最近 12 条</div>
         </div>
         <div class="sec">
           <div class="page-row-title">快捷跳转</div>
@@ -1248,26 +1265,21 @@ watch(aiKey, () => {
   align-items: center;
 }
 .sc-num { font-size: 16px; font-weight: 700; color: #ff5b00; }
-.sc-label { font-size: 10px; color: #b9986f; margin-top: 1px; }
-.tl-row {
-  display: flex;
-  gap: 8px;
-  padding: 4px 0;
-  border-top: 1px solid #f7f7f7;
-  cursor: pointer;
-  font-size: 11px;
-}
-.tl-row:first-of-type { border-top: none; }
-.tl-row:hover .tl-title { color: #ff5b00; }
-.tl-time { flex-shrink: 0; color: #bbb; }
-.tl-title {
-  flex: 1;
+
+/* 图表小方牌：弹性网格（窄面板自动单列） */
+.dp-grid { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin-top: 8px; }
+.dp-card {
+  flex: 1 1 260px;
   min-width: 0;
-  color: #555;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: #fffdfa;
+  border: 1px solid #f5f1ea;
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-sizing: border-box;
 }
+.dp-title { font-size: 12px; color: #909399; margin-bottom: 6px; }
+.dp-tip { color: #b8bcc2; font-size: 11px; margin-left: 4px; }
+.sc-label { font-size: 10px; color: #b9986f; margin-top: 1px; }
 .offer-link-row {
   font-size: 12px;
   color: #ff5b00;

@@ -2,7 +2,7 @@
 // 拦截原后端的所有 /api/v1/* 路径，在 IndexedDB 上实现同名接口，
 // 返回结构与原后端一致（{ code, data, total... }），页面代码无需大改。
 
-import { db, uid, getProfile, saveProfile, storageInfo, getQuotaMB, setQuotaMB, cleanupIfNeeded, exportData, importData, clearStore, clearProducts, pruneStore, STORES } from './localdb.js'
+import { db, uid, getProfile, saveProfile, storageInfo, getQuotaMB, setQuotaMB, cleanupIfNeeded, exportData, importData, clearStore, clearProducts, pruneStore, STORES, getAllWithKeys } from './localdb.js'
 import { stripHtml, joinSearch, countFactoryFields, matchSearch } from './factoryInfo.js'
 import { filterChatForAi, classifyChat, formatChatTranscript } from './chatFilter.js'
 import { retrieveSuppliers, invalidateAiIndex } from './aiSearch.js'
@@ -68,10 +68,12 @@ async function upsertProduct(offer_id, title, main_img_url, supplier_name) {
     p = { offer_id, title: title || '', main_img_url: main_img_url || '', supplier_name: supplier_name ? supplier_name.trim() : '', created_at: Date.now() }
     await db.put('products', p)
   } else {
-    // 补充空字段（每次浏览都可能拿到新数据）
+    // 补充空字段（每次浏览都可能拿到新数据）；标题允许「补全」——
+    // 新标题以旧标题为前缀且更长视为同一商品的更完整版本
+    // （旧兜底 split('-')[0] 曾把 type-c… 截成 "type"，重访页面时用全标题自愈）
     const patch = {}
     if (!p.main_img_url && main_img_url) patch.main_img_url = main_img_url
-    if (!p.title && title) patch.title = title
+    if (title && (!p.title || (title.startsWith(p.title) && title.length > p.title.length))) patch.title = title
     if (!p.supplier_name && supplier_name) patch.supplier_name = supplier_name.trim()
     if (Object.keys(patch).length) await db.put('products', { ...p, ...patch })
   }
@@ -315,22 +317,15 @@ async function route(path, method, body, query) {
   }
 
   // ── 商品浏览（win 详情页每次进入调用）──
-  // 刷新/快速重开合并：同一商品 5 分钟内的再次进入不新增流水，复用上一条
-  // （viewed_at 保持首次进入时刻），停留时长由 /view_records/duration 累加到这条上
+  // 每次进入都是一条新流水（进→关=一个闭环；刷新/重开各算一次，用户口径 2026-11-14），
+  // 停留时长由 /view_records/duration 累加到本次进入的那条上
   if (path === '/api/v1/products/Product_browsing_history' && method === 'POST') {
     const { offer_id, title, main_img_url, supplier_name } = body
     await upsertProduct(offer_id, title, main_img_url, supplier_name)
-    const MERGE_WINDOW = 5 * 60 * 1000
     const all = await db.all('view_records')
     const mine = all.filter(r => r.offer_id === offer_id).sort((a, b) => b.viewed_at - a.viewed_at)
-    const now = Date.now()
-    let viewed_at
-    if (mine[0] && now - mine[0].viewed_at < MERGE_WINDOW) {
-      viewed_at = mine[0].viewed_at // 复用最近一条，不新增
-    } else {
-      viewed_at = now
-      await db.add('view_records', { offer_id, viewed_at })
-    }
+    const viewed_at = Date.now()
+    await db.add('view_records', { offer_id, viewed_at })
     // 同 viewed_at 碎片自愈：工厂店到访与详情页打开并发写（或 SW 重投递）会落几条
     // 同一时间戳的记录——合并成一条（时长求和），保证「一个周期只有一条时长」
     const dups = mine.filter(r => r.viewed_at === viewed_at)
@@ -355,13 +350,44 @@ async function route(path, method, body, query) {
   if (path === '/api/v1/view_records/duration' && method === 'POST') {
     const { offer_id, viewed_at, duration } = body || {}
     if (!offer_id || !viewed_at || !(duration > 0)) return ok(null)
-    const row = (await db.all('view_records')).find(r => r.offer_id === offer_id && r.viewed_at === viewed_at)
-    if (row) {
-      row.duration = Math.min((row.duration || 0) + Math.round(duration), 86400)
-      await db.put('view_records', row)
-      return ok({ duration: row.duration })
+    // view_records 是自增主键 store，db.all() 的行不带 key——db.put(row) 不带 key 会「插入新行」
+    // 而不是更新原行（每次上报多一条流水、浏览次数虚高的元凶）。必须用 getAllWithKeys 拿 key 更新。
+    const { keys, rows } = await getAllWithKeys('view_records')
+    const hits = []
+    rows.forEach((r, i) => {
+      if (r.offer_id === offer_id && r.viewed_at === viewed_at) hits.push({ row: r, key: keys[i] })
+    })
+    if (!hits.length) return ok(null)
+    // 同 viewed_at 重复碎片自愈：合并时长成一条（历史 put 缺 key 造成的碎片由此收敛）
+    let keep = hits[0]
+    if (hits.length > 1) {
+      const sum = hits.reduce((s, h) => s + (h.row.duration || 0), 0)
+      keep.row.duration = sum
+      for (let i = 1; i < hits.length; i++) await db.delete('view_records', hits[i].key)
     }
-    return ok(null)
+    keep.row.duration = Math.min((keep.row.duration || 0) + Math.round(duration), 86400)
+    await db.put('view_records', keep.row, keep.key)
+    invalidateAiIndex()
+    return ok({ duration: keep.row.duration })
+  }
+
+  // 纠错：清零某条流水的停留时长，并把同 viewed_at 的重复碎片收敛成一条
+  //（误计时修正 + 旧版 db.put 缺 key 造成的重复行清理）
+  if (path === '/api/v1/view_records/reset_dwell' && method === 'POST') {
+    const { offer_id, viewed_at } = body || {}
+    if (!offer_id || !viewed_at) return ok(null)
+    const { keys, rows } = await getAllWithKeys('view_records')
+    const hits = []
+    rows.forEach((r, i) => {
+      if (r.offer_id === offer_id && r.viewed_at === viewed_at) hits.push({ row: r, key: keys[i] })
+    })
+    if (!hits.length) return ok(null)
+    hits.sort((a, b) => (b.row.duration || 0) - (a.row.duration || 0))
+    for (let i = 1; i < hits.length; i++) await db.delete('view_records', hits[i].key)
+    hits[0].row.duration = 0
+    await db.put('view_records', hits[0].row, hits[0].key)
+    invalidateAiIndex()
+    return ok({ duration: 0, removed: hits.length - 1 })
   }
 
   // ── 工厂店卡片页到访（sale.1688.com/factory/card.html）：算看过该供应商 ──
@@ -788,7 +814,20 @@ async function route(path, method, body, query) {
     items.sort((a, b) => a.viewed_at - b.viewed_at) // 正序：旧在上、新在下
     // 总停留时长（秒）：本商品全部浏览流水时长合计（仅本地自有记录有 duration）
     const totalDwell = (records.filter(r => r.offer_id === offer_id)).reduce((s, r) => s + (r.duration || 0), 0)
-    return ok(items, { total_dwell: totalDwell, view_total: items.length })
+
+    // 按天聚合（本地时区）：日历热力图用。count 含他人浏览，dwell 仅本地自有记录有时长
+    const dailyMap = new Map()
+    for (const it of items) {
+      const d = new Date(it.viewed_at)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      const cur = dailyMap.get(key) || { date: key, count: 0, dwell: 0 }
+      cur.count++
+      cur.dwell += it.duration || 0
+      dailyMap.set(key, cur)
+    }
+    const daily = [...dailyMap.values()].sort((a, b) => (a.date < b.date ? -1 : 1))
+
+    return ok(items, { total_dwell: totalDwell, view_total: items.length, daily })
   }
 
   // ── 商品的他人笔记 ──  // GET /api/v1/products/:id/others

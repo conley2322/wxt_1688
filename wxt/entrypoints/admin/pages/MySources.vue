@@ -16,6 +16,8 @@ import OthersComments from '@/entrypoints/win/components/OthersComments.vue'
 import HsTrendChart from '@/components/HsTrendChart.vue'
 import HsHourlyChart from '@/components/HsHourlyChart.vue'
 import HsHeatmap from '@/components/HsHeatmap.vue'
+import HsDwellCharts from '@/components/HsDwellCharts.vue'
+import HsCalendarHeatmap from '@/components/HsCalendarHeatmap.vue'
 import {
   groupFactoryInfo, areaBucket, employeeBucket,
   AREA_BUCKETS, EMP_BUCKETS, fmtProfileTime, matchSearch,
@@ -217,6 +219,11 @@ async function loadTabOrder() {
 // 当前选中的供应商
 const currentName = ref('')
 const currentGroup = computed(() => groups.value.find(g => g.supplier_name === currentName.value) || null)
+// 浏览时长排行：该供应商各商品停留总时长降序（分组接口的 dwell_seconds 直接可用）
+const dwellRank = computed(() => (currentGroup.value?.products || [])
+  .map(p => ({ offer_id: p.offer_id, title: p.title || p.offer_id, dwell: p.dwell_seconds || 0, views: p.view_count || 0 }))
+  .filter(p => p.dwell > 0)
+  .sort((a, b) => b.dwell - a.dwell))
 const pinnedSuppliers = ref([])
 const sortMode = ref('time')   // time = 最新活动在前 | name = 名称排序
 // 合并条目的构建在 allEntries（上方，筛选管线入口）；
@@ -551,10 +558,14 @@ async function load() {
     }
     if (chatRes.code === 200) chatSuppliers.value = chatRes.suppliers || []
     await loadPinned()
-    // 默认选中第一个供应商（grouped 接口已把有笔记的排最前；聊天-only 的也纳入）
+    // 只有带 ?name= 深链（概览页点供应商）才自动选中；普通进入不跳供应商，右侧空态等用户点选
     const names = mergedEntries.value.map(e => e.name)
-    if (!currentName.value || !names.includes(currentName.value)) {
-      currentName.value = (initialName && names.includes(initialName)) ? initialName : names[0] || ''
+    if (currentName.value && !names.includes(currentName.value)) {
+      // 已选供应商被数据刷新清掉了 → 回落清空，不强行换人
+      currentName.value = ''
+    }
+    if (!currentName.value && initialName && names.includes(initialName)) {
+      currentName.value = initialName
       // 初始页签跟随拖拽后的第一位（仅在选择变化时设置，不干扰自动刷新中的当前页签）
       rightTab.value = tabOrder.value[0] || 'note'
       loadMessages(currentName.value)
@@ -568,9 +579,9 @@ async function load() {
   }
 }
 
-// 搜索/筛选把当前供应商过滤掉了 → 自动切到过滤结果里的第一个（不重置右栏页签）
+// 搜索/筛选把当前供应商过滤掉了 → 自动切到过滤结果里的第一个（未选中时不动作；不重置右栏页签）
 watch(mergedEntries, (list) => {
-  if (!list.length) return
+  if (!currentName.value || !list.length) return
   if (list.some(e => e.name === currentName.value)) return
   const first = list[0]
   currentName.value = first.name
@@ -634,14 +645,38 @@ function fmtDateTime(ts) {
 }
 
 // ── 商品详情 ──
+const tlDaily = ref([])   // 按天聚合 [{date, count, dwell}]，来自 view-timeline
+const tlItems = ref([])   // 逐次浏览记录（含 duration），点热力图格子后展示
+const tlDay = ref('')
+function dayKeyOf(ts) {
+  const d = new Date(ts)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+const tlDayItems = computed(() => tlItems.value
+  .filter(it => dayKeyOf(it.viewed_at) === tlDay.value)
+  .sort((a, b) => a.viewed_at - b.viewed_at))
+const tlDayMax = computed(() => Math.max(...tlDayItems.value.map(it => it.duration || 0), 1))
+function tlMeterW(it) { return Math.round((it.duration || 0) / tlDayMax.value * 100) + '%' }
+
 async function openProduct(p) {
   currentProduct.value = p
   drawerVisible.value = true
   detail.value = null
   detailLoading.value = true
+  tlDaily.value = []
+  tlItems.value = []
+  tlDay.value = ''
   try {
-    const res = await api(`/api/v1/products/${p.offer_id}/stats`, 'GET')
+    const [res, tl] = await Promise.all([
+      api(`/api/v1/products/${p.offer_id}/stats`, 'GET'),
+      api(`/api/v1/products/${p.offer_id}/view-timeline`, 'GET'),
+    ])
     if (res.code === 200) detail.value = res.data
+    if (tl.code === 200) {
+      tlDaily.value = tl.daily || []
+      tlItems.value = tl.data || []
+    }
   } finally {
     detailLoading.value = false
   }
@@ -872,17 +907,28 @@ async function deleteSupplier(name) {
             <div class="ss-times" v-if="supStats.last_view_at">
               首次浏览 {{ fmtTs(supStats.first_view_at) }} · 最近浏览 {{ fmtTs(supStats.last_view_at) }}
             </div>
-            <HsTrendChart v-if="supStats.daily && supStats.daily.length" :daily="supStats.daily" :height="150" />
-            <div class="ss-tl-title">浏览时段分布</div>
-            <HsHourlyChart v-if="supStats.hourly && supStats.hourly.length" :hourly="supStats.hourly" :height="120" />
-            <div class="ss-tl-title">浏览热力图（星期 × 小时）</div>
-            <HsHeatmap v-if="supStats.heatmap && supStats.heatmap.length" :heatmap="supStats.heatmap" :height="150" />
-            <div class="ss-tl-title">浏览时间轴（最近 20 条）</div>
-            <div v-if="!supStats.timeline || !supStats.timeline.length" class="pane-empty">暂无浏览记录</div>
-            <div v-for="t in (supStats.timeline || []).slice(0, 20)" :key="t.ts + t.offer_id" class="ss-tl-row" @click="openProduct({ offer_id: t.offer_id, title: t.title })">
-              <span class="ss-tl-time">{{ fmtTs(t.ts) }}</span>
-              <span class="ss-tl-title" :title="t.title">{{ t.title || t.offer_id }}</span>
-              <span class="ss-tl-dwell" v-if="t.duration">{{ fmtDwell(t.duration) }}</span>
+            <!-- 图表小方牌：弹性网格，宽屏多列、窄屏自动单列 -->
+            <div class="dp-grid">
+              <div class="dp-card">
+                <div class="dp-title">近 30 天 出现 / 浏览趋势</div>
+                <HsTrendChart v-if="supStats.daily && supStats.daily.length" :daily="supStats.daily" :height="150" />
+                <div v-else class="pane-empty">暂无数据</div>
+              </div>
+              <div class="dp-card">
+                <div class="dp-title">浏览时段分布 <span class="dp-tip">24 小时</span></div>
+                <HsHourlyChart v-if="supStats.hourly && supStats.hourly.length" :hourly="supStats.hourly" :height="150" />
+                <div v-else class="pane-empty">暂无数据</div>
+              </div>
+              <div class="dp-card dp-wide">
+                <div class="dp-title">浏览热力图 <span class="dp-tip">星期 × 小时</span></div>
+                <HsHeatmap v-if="supStats.heatmap && supStats.heatmap.length" :heatmap="supStats.heatmap" :height="150" />
+                <div v-else class="pane-empty">暂无数据</div>
+              </div>
+              <div class="dp-card dp-wide">
+                <div class="dp-title">浏览时长排行 <span class="dp-tip">商品停留总时长 · 图表可切换 · 点击跳商品</span></div>
+                <HsDwellCharts v-if="dwellRank.length" :list="dwellRank" :height="Math.max(90, dwellRank.length * 24 + 36)" @pick="openProduct({ offer_id: $event.offer_id, title: $event.title })" />
+                <div v-else class="pane-empty">暂无停留记录</div>
+              </div>
             </div>
           </div>
           <div v-else class="pane-empty">该供应商暂无商品浏览数据（仅聊天记录的供应商没有统计数据）</div>
@@ -1081,6 +1127,18 @@ async function deleteSupplier(name) {
           <HsTrendChart :daily="detail.daily" :height="170" />
           <h4 class="d-section" style="margin-top: 10px">浏览时段分布</h4>
           <HsHourlyChart v-if="detail.hourly && detail.hourly.length" :hourly="detail.hourly" :height="130" />
+          <template v-if="tlDaily.length">
+            <h4 class="d-section" style="margin-top: 10px">按天停留热力图<span class="d-sec-sub">近 150 天 · 格子越绿停留越久 · 点格子看当天每一次</span></h4>
+            <HsCalendarHeatmap :daily="tlDaily" @pick="tlDay = $event" />
+            <div class="d-tl-day" v-if="tlDay && tlDayItems.length">
+              <div v-for="(it, i) in tlDayItems" :key="it.viewed_at + '-' + i" class="d-tl-row">
+                <span class="d-tl-name">{{ it.mine ? '我' : (it.nickname || '匿名') }}</span>
+                <span class="d-tl-meter"><i :style="{ width: tlMeterW(it) }"></i></span>
+                <span class="d-tl-dwell">{{ it.duration ? fmtDwell(it.duration) : '—' }}</span>
+                <span class="d-tl-time">{{ fmtDateTime(it.viewed_at) }}</span>
+              </div>
+            </div>
+          </template>
           <h4 class="d-section" style="margin-top: 10px">近 30 天出现 / 浏览记录</h4>
           <div class="d-day-list">
             <div v-for="d in viewedDays" :key="d.date" class="d-day-row">
@@ -1496,25 +1554,22 @@ async function deleteSupplier(name) {
 .ss-label { font-size: 10px; color: #b9986f; }
 .ss-times { font-size: 11px; color: #a8abb2; margin-bottom: 6px; }
 .ss-tl-title { font-size: 12px; color: #909399; margin: 8px 0 4px; }
-.ss-tl-row {
-  display: flex;
-  gap: 8px;
-  padding: 4px 0;
-  border-top: 1px solid #f7f4ef;
-  cursor: pointer;
-  font-size: 12px;
+.ss-tl-tip { color: #b0b3b8; font-size: 11px; }
+
+/* 数据页图表小方牌：弹性网格 */
+.dp-grid { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; margin-top: 8px; }
+.dp-card {
+  flex: 1 1 330px;
+  min-width: 300px;
+  background: #fff;
+  border: 1px solid #f0e9e2;
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-sizing: border-box;
 }
-.ss-tl-row:hover .ss-tl-title { color: #c9975c; }
-.ss-tl-time { flex-shrink: 0; color: #c4b08c; }
-.ss-tl-dwell { flex-shrink: 0; margin-left: auto; color: #8fbf9f; font-size: 11px; }
-.ss-tl-title {
-  flex: 1;
-  min-width: 0;
-  color: #5b4a35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.dp-card.dp-wide { flex-basis: 430px; }
+.dp-title { font-size: 12px; color: #909399; margin-bottom: 6px; }
+.dp-tip { color: #b8bcc2; font-size: 11px; margin-left: 4px; }
 
 /* 商品行 */
 .product-rows { flex: 1; overflow-y: auto; padding: 8px 10px; }
@@ -1576,6 +1631,14 @@ async function deleteSupplier(name) {
 .d-appear { color: #7d96bd; }
 .d-view { color: #c9975c; font-weight: 600; }
 .d-dwell { color: #8fbf9f; }
+.d-sec-sub { font-size: 10px; color: #bbb; font-weight: 400; margin-left: 6px; }
+.d-tl-day { margin-top: 4px; }
+.d-tl-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
+.d-tl-name { color: #333; font-weight: 600; width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-tl-meter { flex: 1; height: 6px; border-radius: 3px; background: #f1f2f4; overflow: hidden; }
+.d-tl-meter i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #a9cfb6, #7fb28f); }
+.d-tl-dwell { color: #4a7c5e; font-weight: 600; font-size: 11px; width: 56px; text-align: right; white-space: nowrap; }
+.d-tl-time { color: #909399; font-size: 11px; width: 78px; text-align: right; white-space: nowrap; }
 .row-jump {
   display: inline-flex;
   align-items: center;
