@@ -97,8 +97,8 @@ export default defineContentScript({
       setupIm()
       return
     }
-    // 工厂店卡片页（sale.1688.com/factory/card.html）：整页单工厂档案。
-    // 进入该页 = 看过该供应商（特征商品浏览流水 + 页面商品出现流水），
+    // 工厂店卡片页（card.html，整页单工厂档案）+ 产品目录页（/factory/*.html?memberId=..，
+    // 整页该供应商全部商品）：进入 = 看过该供应商（目录页只 upsert 供应商与商品、不记商品浏览）
     let scanCount = 0
     // 已挂载但尚未随供应商名一起请求的商品（等店铺头部公司名就绪）
     const pendingShopOffers = new Set()
@@ -115,8 +115,8 @@ export default defineContentScript({
     let batchFailToasted = false // 连续失败只弹一次提示（重试期间不刷屏；成功后复位）
 
     // 商品标题/图片就地回填（修复后台「未采集标题」），并挂 FactoryNoteCard 浮窗
-    if (host === 'sale.1688.com' && location.pathname.startsWith('/factory/card.html')) {
-      console.log('[box] 工厂店卡片页，启动采集 + 备注浮窗')
+    if (host === 'sale.1688.com' && location.pathname.startsWith('/factory/')) {
+      console.log('[box] 工厂店卡片页/产品目录页，启动采集 + 备注浮窗')
       setupFactoryCardPage()
       return
     }
@@ -579,10 +579,13 @@ export default defineContentScript({
     }
     async function setupFactoryCardPage() {
       // 构建标记：写进共享 DOM 属性，主世界（DevTools/eval）可读，用于确认页面跑的是哪一版
-      try { document.documentElement.setAttribute('data-alocs-fc-build', 'D11-1114') } catch {}
+      try { document.documentElement.setAttribute('data-alocs-fc-build', 'D13-1114') } catch {}
       const qs = new URLSearchParams(location.search)
       const memberId = qs.get('memberId') || ''
       const topOfferIds = (qs.get('topOfferIds') || '').split(',').map(s => s.trim()).filter(Boolean)
+      // 产品目录页（/factory/*.html 非 card.html）：整页该供应商全部商品。标题只有「产品目录」
+      // 两个字，工厂名要从页面叶子文本找；到访只 upsert 供应商与商品、不记特征商品浏览
+      const isCatalog = !location.pathname.startsWith('/factory/card.html')
       // 注意：本分支在 main() 里早于页面级 pinia 定义就被调用，这里必须自建实例
       // （复用页面级 pinia 会触发暂时性死区 ReferenceError，整条工厂店流程静默崩掉）
       const fcPinia = createPinia()
@@ -596,10 +599,26 @@ export default defineContentScript({
         console.error('[box:factorycard] 读取默认页签设置失败:', e)
       }
 
-      // 工厂名：document.title 形如「厂名-企业信息查询黄页-阿里巴巴」
+      // 工厂名：卡片页 document.title 形如「厂名-企业信息查询黄页-阿里巴巴」；
+      // 目录页标题只有「产品目录」——从页面叶子文本找（排除商品卡链接内部，找到后缓存）
+      let fcNameCache = ''
       function factoryName() {
+        if (fcNameCache) return fcNameCache
         const t = (document.title || '').split('-')[0].trim()
-        return t && !/企业信息查询|阿里巴巴/.test(t) ? t : ''
+        if (!isCatalog) {
+          if (t && !/企业信息查询|阿里巴巴/.test(t)) fcNameCache = t
+          return fcNameCache
+        }
+        for (const el of document.querySelectorAll('body *')) {
+          if (el.children.length) continue
+          if (el.closest('a[href*="detail.1688.com/offer/"]')) continue
+          const t2 = (el.textContent || '').trim()
+          if (t2.length >= 6 && t2.length <= 40 && /(有限公司|有限责任公司|厂|经营部|商行|公司)$/.test(t2)) {
+            fcNameCache = t2
+            return t2
+          }
+        }
+        return ''
       }
 
       // 页面商品：全部 detail.1688.com/offer/:id 链接。
@@ -636,8 +655,9 @@ export default defineContentScript({
 
       async function recordVisit(name, prods) {
         const allIds = [...prods.keys()]
-        // 特征商品（URL topOfferIds）记「浏览」；没有时取页面前 3 个，保证供应商进入「已看」
-        const viewIds = topOfferIds.length ? topOfferIds : allIds.slice(0, 3)
+        // 特征商品（URL topOfferIds）记「浏览」；没有时取页面前 3 个，保证供应商进入「已看」。
+        // 目录页用户没点开任何详情页，不虚构商品浏览（viewIds 空 = 只 upsert 供应商与商品）
+        const viewIds = topOfferIds.length ? topOfferIds : (isCatalog ? [] : allIds.slice(0, 3))
         try {
           const res = await dataApi('/api/v1/suppliers/visit_records', 'POST', {
             supplier_name: name,
@@ -903,12 +923,28 @@ export default defineContentScript({
       function scanFactoryShopProducts() {
         const marker = [...document.querySelectorAll('a')].find(a => /共\d+个商品/.test(a.textContent || ''))
         fcDebugLog('shopScan marker=' + !!marker)
-        if (!marker) return
-        let grid = marker
-        for (let i = 0; i < 8 && grid; i++) {
-          grid = grid.parentElement
-          if (!grid) break
-          if (grid.querySelectorAll('a[href*="detail.1688.com/offer/"]').length >= 3) break
+        let grid = null
+        if (marker) {
+          // 卡片页：从「共N个商品」链接向上爬到含 ≥3 个商品链接的祖先（=商品网格容器）
+          grid = marker
+          for (let i = 0; i < 8 && grid; i++) {
+            grid = grid.parentElement
+            if (!grid) break
+            if (grid.querySelectorAll('a[href*="detail.1688.com/offer/"]').length >= 3) break
+          }
+        } else if (isCatalog) {
+          // 目录页没有「共N个商品」标记：从任一商品链接向上爬，取「商品链接数不再增长」的
+          // 祖先（= 列表容器；更高层只是包裹节点、链接数持平）——与相似工厂卡同一自适应思路。
+          // 注意计数要含起点自身（querySelectorAll 不含 el 本身），否则 n=0 直接 break
+          const SEL = 'a[href*="detail.1688.com/offer/"]'
+          const a0 = document.querySelector(SEL)
+          let best = null
+          let prevN = 0
+          for (let el = a0, i = 0; el && i < 8; i++, el = el.parentElement) {
+            const n = (el.matches(SEL) ? 1 : 0) + el.querySelectorAll(SEL).length
+            if (n > prevN) { best = el; prevN = n } else break
+          }
+          grid = best
         }
         fcDebugLog('shopScan grid=' + !!grid + (grid ? ' links=' + grid.querySelectorAll('a[href*="detail.1688.com/offer/"]').length : ''))
         if (!grid) return
