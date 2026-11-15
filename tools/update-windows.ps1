@@ -1,14 +1,14 @@
 ﻿# ============================================================
 #  ALOCS-1688 单机版 · 一键升级（Windows / PowerShell）
 #  作用：下载 GitHub 最新版 → 覆盖已装扩展目录 → 数据完整保留
-#  原理：扩展 ID 固定为 jfmjpidelkddbbfdjaopimehhconoekm，
+#  原理：扩展 ID 固定为 omlkcfhmicbbekplnfclgnpldachonoo，
 #        只换文件、不改 ID、不动目录名，IndexedDB 数据原地保留。
 # ============================================================
 
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 
-$ExtId = 'jfmjpidelkddbbfdjaopimehhconoekm'
+$ExtId = 'omlkcfhmicbbekplnfclgnpldachonoo'
 $Repo  = 'conley2322/wxt_1688'
 $Api   = "https://api.github.com/repos/$Repo/releases/latest"
 
@@ -118,14 +118,13 @@ if (-not (Test-Path (Join-Path $src 'manifest.json'))) { Die "安装包里没有
 
 # 校验新包 ID，避免装成另一个扩展
 $m = Get-Content (Join-Path $src 'manifest.json') -Raw | ConvertFrom-Json
-if ($m.key) {
-  $sha = [Security.Cryptography.SHA256]::Create()
-  $hash = $sha.ComputeHash([Convert]::FromBase64String($m.key))
-  $alpha = 'abcdefghijklmnop'
-  $pkgId = ($hash[0..15] | ForEach-Object { $alpha[($_ -shr 4) -band 0xf] + $alpha[$_ -band 0xf] }) -join ''
-  if ($pkgId -ne $ExtId) { Die "安装包 ID ($pkgId) 与现有扩展 ($ExtId) 不一致，装上去会变成另一个扩展、看不到老数据。已中止。" }
-  Ok "包 ID 校验通过"
-}
+if (-not $m.key) { Die "安装包缺少固定公钥，已中止。" }
+$sha = [Security.Cryptography.SHA256]::Create()
+$hash = $sha.ComputeHash([Convert]::FromBase64String($m.key))
+$alpha = 'abcdefghijklmnop'
+$pkgId = ($hash[0..15] | ForEach-Object { $alpha[($_ -shr 4) -band 0xf] + $alpha[$_ -band 0xf] }) -join ''
+if ($pkgId -ne $ExtId) { Die "安装包 ID ($pkgId) 与现有扩展 ($ExtId) 不一致，装上去会变成另一个扩展、看不到老数据。已中止。" }
+Ok "包 ID 校验通过"
 
 $bak = "$Target.bak." + (Get-Date -Format 'yyyyMMdd-HHmmss')
 Copy-Item $Target $bak -Recurse -Force
@@ -134,12 +133,6 @@ Ok "已备份：$(Split-Path $bak -Leaf)"
 # 整目录覆盖：目录名与路径不动 -> ID 不变 -> 数据保留
 Get-ChildItem $Target -Force | Remove-Item -Recurse -Force
 Copy-Item (Join-Path $src '*') $Target -Recurse -Force
-
-# 本地解压加载不需要 key
-$mf = Join-Path $Target 'manifest.json'
-$obj = Get-Content $mf -Raw | ConvertFrom-Json
-$obj.PSObject.Properties.Remove('key')
-$obj | ConvertTo-Json -Depth 10 | Set-Content $mf -Encoding UTF8
 
 $installed = (Get-Content $mf -Raw | ConvertFrom-Json).version
 Ok "安装完成，当前版本：$installed"

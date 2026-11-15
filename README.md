@@ -136,13 +136,13 @@ wxt_1688/
 2. 打开 `chrome://extensions`（QQ 浏览器为 `qqbrowser://extensions`），开启右上角「开发者模式」
 3. 点「加载已解压的扩展程序」，选择解压出来的文件夹
 
-> 扩展 ID 已通过 manifest `key` 固定为 `jfmjpidelkddbbfdjaopimehhconoekm`，与安装路径、版本号无关。**同一个浏览器里重复安装不会产生多个 ID，数据也不会因升级丢失。**
+> 从 v1.2.3 起，ZIP 和 CRX 统一使用扩展 ID `omlkcfhmicbbekplnfclgnpldachonoo`。Chrome 用户请用上述解压加载方式。允许安装 CRX 的浏览器也可选 CRX，升级时沿用原来的安装方式。
 
-> **关于 CRX**：v1.2.x 起不再提供 CRX 安装包。早期打包 CRX 用的签名私钥已丢失，重新签名会让扩展 ID 变成另一个值，老用户装上去就成了「第二个插件」、看不到原有数据。zip 覆盖升级才是 ID 恒定、数据无损的方式（见下节）。
+### 升级与保留本机数据
 
-### 从旧版本升级（数据全部保留）
+本机 IndexedDB 按浏览器用户配置和扩展 ID 存储。使用同一浏览器配置、同一扩展 ID，原位升级后继续使用原来的数据。
 
-**核心原理**：扩展 ID 由 manifest `key` 固定为 `jfmjpidelkddbbfdjaopimehhconoekm`，本机数据（IndexedDB）按这个 ID 存放。升级只要**换掉扩展目录里的文件、不换目录名和 ID**，浏览器就认作「同一款扩展的版本更新」，笔记、聊天记录、供应商档案全部原地保留。
+旧 ZIP 曾使用 `jfmjpidelkddbbfdjaopimehhconoekm`。从这个 ID 转到新版会启用一份新数据库；如需带入旧记录，请先从旧版后台导出，再在新版导入。旧版使用新版统一 ID 的用户，可按原安装方式升级。
 
 #### 方法 A：一键升级脚本（推荐）
 
@@ -153,7 +153,7 @@ wxt_1688/
 | macOS | `一键升级-macOS.command` | 首次运行若被系统拦截，右键 → 打开 |
 | Windows | `一键升级-Windows.bat` | 与 `update-windows.ps1` 放在同一目录 |
 
-脚本会自动完成：查最新版 → 下载 → 校验扩展 ID → 备份旧目录 → 整目录覆盖 → 提示重载。全程不动数据库，末尾还会问你是否自动重启浏览器让更新生效。
+对于脚本能找到的已安装扩展目录，脚本会自动完成：查最新版 → 下载 → 校验扩展 ID → 备份旧目录 → 整目录覆盖 → 提示重载。全程不动数据库，末尾还会问你是否自动重启浏览器让更新生效。
 
 同版本会直接提示「已是最新」，不会重复覆盖。
 
@@ -166,37 +166,14 @@ wxt_1688/
 #### ⚠️ 千万别这么做
 
 - **不要「先移除旧扩展再装新的」**——移除时浏览器会删掉该 ID 对应的 IndexedDB，数据就真没了
-- **不要解压到新文件夹再「加载已解压」**——新路径会派生新 ID，等于装成第二个插件
+- 已经用「加载已解压」安装的用户，在原文件夹覆盖和重载。正式包的 `manifest.json` 必须保留 `key`。
 - 升级前建议顺手导出一次备份：后台 → 存储管理 → 导出 JSON
 
 
 
-### 开发自用：源码构建后原位覆盖
+### 打包和签名
 
-改完代码不想走「移除 → 重装」流程时，可以把新构建**直接覆盖进浏览器已装的扩展目录**，重载即生效，数据（IndexedDB）完全不受影响：
-
-```bash
-# 1. 构建新版本
-cd wxt && npm run build
-
-# 2. 找到已装扩展目录（扩展 ID / 版本号_0 目录名，路径因浏览器而异）
-#    QQ 浏览器: ~/Library/Application Support/QQBrowser3/Default/Extensions/<扩展ID>/<版本>_0
-#    Chrome:    ~/Library/Application Support/Google/Chrome/Default/Extensions/<扩展ID>/<版本>_0
-#    扩展 ID 可在 chrome://extensions 页面或 <数据目录>/Default/Secure Preferences 里查到
-
-# 3. 备份 → 整目录覆盖
-cp -R "<扩展目录>" /tmp/ext-backup-$(date +%m%d-%H%M%S)
-rm -rf "<扩展目录>"
-cp -R wxt/.output/chrome-mv3 "<扩展目录>"
-
-# 4. 重启浏览器（只刷新页面无效，渲染进程缓存着旧脚本）
-```
-
-三条铁律：
-
-1. **目录名别动**（保持 `<版本>_0` 原名）：浏览器注册表里记录的就是这条路径，改名会导致扩展失效；
-2. **必须整目录替换**：`assets/` 文件名带内容 hash，只丢几个文件会新旧混杂；
-3. **⚠️ 如果新构建的 manifest 带 `key` 字段，覆盖后必须删掉它**：`key` 会让浏览器按公钥重算扩展 ID，与注册表里按路径派生的旧 ID 对不上，扩展会被直接禁用。`python3 -c "import json;p='<扩展目录>/manifest.json';m=json.load(open(p));m.pop('key',None);json.dump(m,open(p,'w'))"` 一行即可。带 `key` 的完整构建只用于对外发行的 CRX/ZIP。
+发布者请参阅 [固定扩展 ID 与签名私钥](docs/发行签名与固定扩展ID.md)。打包时若 ZIP 公钥、CRX 私钥与固定 ID 有任何不一致，命令会失败。
 
 ### 从源码构建（单机模式）
 

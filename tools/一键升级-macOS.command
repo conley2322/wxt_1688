@@ -3,13 +3,13 @@
 # ALOCS-1688 单机版 · 一键升级（macOS）
 #
 # 作用：下载 GitHub 最新版本 → 覆盖到已安装的扩展目录 → 数据完整保留
-# 原理：扩展 ID 由 manifest 固定为 jfmjpidelkddbbfdjaopimehhconoekm，
+# 原理：扩展 ID 由 manifest 固定为 omlkcfhmicbbekplnfclgnpldachonoo，
 #       升级只换文件、不改 ID、不动目录名，所以 IndexedDB 里的数据原地保留。
 # 用法：双击运行。首次可能被系统拦截，右键 → 打开。
 # ============================================================
 set -uo pipefail
 
-EXT_ID="jfmjpidelkddbbfdjaopimehhconoekm"
+EXT_ID="omlkcfhmicbbekplnfclgnpldachonoo"
 REPO="conley2322/wxt_1688"
 API="https://api.github.com/repos/${REPO}/releases/latest"
 
@@ -155,7 +155,7 @@ h=hashlib.sha256(base64.b64decode(k)).hexdigest()[:32]
 print(''.join('abcdefghijklmnop'[int(c,16)] for c in h))
 PY
 )
-if [ "$PKG_ID" != "$EXT_ID" ] && [ "$PKG_ID" != "(无key)" ]; then
+if [ "$PKG_ID" != "$EXT_ID" ]; then
   die "安装包 ID ($PKG_ID) 与现有扩展 ($EXT_ID) 不一致，装上去会变成另一个扩展、看不到老数据。已中止。"
 fi
 ok "包 ID 校验通过"
@@ -166,13 +166,6 @@ ok "已备份：$(basename "$BAK")"
 
 # 整目录覆盖：目录名与路径保持不动 → ID 不变 → 数据保留
 rsync -a --delete "$SRC"/ "$TARGET"/ || die "覆盖失败。原目录已备份在：$BAK"
-
-# 本地解压加载不需要 key；删掉保持与原有安装状态一致
-python3 - "$TARGET/manifest.json" <<'PY'
-import json,sys
-p=sys.argv[1]; m=json.load(open(p)); m.pop('key',None)
-json.dump(m,open(p,'w'),ensure_ascii=False,indent=2)
-PY
 
 INSTALLED=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$TARGET/manifest.json" 2>/dev/null)
 ok "安装完成，当前版本：$INSTALLED"

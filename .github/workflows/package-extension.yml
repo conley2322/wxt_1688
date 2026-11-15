@@ -1,0 +1,58 @@
+name: Package ALOCS-1688
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, standalone-local]
+    paths:
+      - .github/workflows/package-extension.yml
+    tags: ['package-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: wxt/package-lock.json
+      - name: Install build dependencies
+        working-directory: wxt
+        run: npm ci
+      - name: Package and sign
+        working-directory: wxt
+        env:
+          ALOCS_CRX_SIGNING_KEY: ${{ secrets.ALOCS_CRX_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$ALOCS_CRX_SIGNING_KEY" ]]; then
+            echo "::error::GitHub Actions Secret ALOCS_CRX_SIGNING_KEY is required."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/package-v* ]]; then
+            version=$(node -p "require('./package.json').version")
+            if [[ "$GITHUB_REF_NAME" != "package-v$version" ]]; then
+              echo "::error::Packaging tag must be package-v$version."
+              exit 1
+            fi
+          fi
+          key_file=$(mktemp)
+          trap 'rm -f -- "$key_file"' EXIT
+          printf '%s\n' "$ALOCS_CRX_SIGNING_KEY" > "$key_file"
+          unset ALOCS_CRX_SIGNING_KEY
+          ALOCS_CRX_KEY="$key_file" npm run zip
+      - name: Upload ZIP and CRX
+        uses: actions/upload-artifact@v4
+        with:
+          name: alocs-1688-chrome
+          path: |
+            wxt/.output/*-chrome.zip
+            wxt/.output/*-chrome.crx
+          if-no-files-found: error
