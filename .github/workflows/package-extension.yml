@@ -36,8 +36,8 @@ jobs:
             echo "::error::GitHub Actions Secret ALOCS_CRX_SIGNING_KEY is required."
             exit 1
           fi
+          version=$(node -p "require('./package.json').version")
           if [[ "$GITHUB_REF" == refs/tags/package-v* ]]; then
-            version=$(node -p "require('./package.json').version")
             if [[ "$GITHUB_REF_NAME" != "package-v$version" ]]; then
               echo "::error::Packaging tag must be package-v$version."
               exit 1
@@ -48,11 +48,12 @@ jobs:
           printf '%s\n' "$ALOCS_CRX_SIGNING_KEY" > "$key_file"
           unset ALOCS_CRX_SIGNING_KEY
           ALOCS_CRX_KEY="$key_file" npm run zip
+          archive="alocs-1688-standalone-$version-chrome"
+          mkdir -p "$RUNNER_TEMP/alocs-release"
+          cp ".output/$archive.zip" ".output/$archive.crx" "$RUNNER_TEMP/alocs-release/"
       - name: Upload ZIP and CRX
         uses: actions/upload-artifact@v4
         with:
           name: alocs-1688-chrome
-          path: |
-            wxt/.output/*-chrome.zip
-            wxt/.output/*-chrome.crx
+          path: ${{ runner.temp }}/alocs-release/
           if-no-files-found: error
